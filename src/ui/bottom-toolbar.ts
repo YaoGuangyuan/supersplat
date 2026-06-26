@@ -46,6 +46,22 @@ class BottomToolbar extends Container {
             enabled: false
         });
 
+        const filter = new Button({
+            id: 'bottom-toolbar-filter',
+            class: 'bottom-toolbar-button',
+            icon: 'E198'
+        });
+        const plane = new Button({
+            id: 'bottom-toolbar-plane',
+            class: 'bottom-toolbar-button',
+            icon: 'E198'
+        });
+        const section = new Button({
+            id: 'bottom-toolbar-section',
+            class: 'bottom-toolbar-button',
+            icon: 'E198'
+        });
+
         const picker = new Button({
             id: 'bottom-toolbar-picker',
             class: 'bottom-toolbar-tool'
@@ -142,6 +158,9 @@ class BottomToolbar extends Container {
         this.append(undo);
         this.append(redo);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
+        this.append(filter);
+        this.append(plane);
+        this.append(section);
         this.append(picker);
         this.append(lasso);
         this.append(polygon);
@@ -163,6 +182,9 @@ class BottomToolbar extends Container {
 
         undo.dom.addEventListener('click', () => events.fire('edit.undo'));
         redo.dom.addEventListener('click', () => events.fire('edit.redo'));
+        filter.dom.addEventListener('click', () => events.fire('filter.toggle'));
+        plane.dom.addEventListener('click', () => events.fire('plane.toggle'));
+        section.dom.addEventListener('click', () => events.fire('section.toggle'));
         polygon.dom.addEventListener('click', () => events.fire('tool.polygonSelection'));
         lasso.dom.addEventListener('click', () => events.fire('tool.lassoSelection'));
         brush.dom.addEventListener('click', () => events.fire('tool.brushSelection'));
@@ -224,6 +246,9 @@ class BottomToolbar extends Container {
         // register tooltips
         tooltips.register(undo, tooltip('tooltip.bottom-toolbar.undo', 'edit.undo'));
         tooltips.register(redo, tooltip('tooltip.bottom-toolbar.redo', 'edit.redo'));
+        tooltips.register(filter, 'Filter Panel');
+        tooltips.register(plane, 'Plane Tool');
+        tooltips.register(section, 'Section Tool');
         tooltips.register(picker, tooltip('tooltip.bottom-toolbar.rect', 'tool.rectSelection'));
         tooltips.register(lasso, tooltip('tooltip.bottom-toolbar.lasso', 'tool.lassoSelection'));
         tooltips.register(polygon, tooltip('tooltip.bottom-toolbar.polygon', 'tool.polygonSelection'));

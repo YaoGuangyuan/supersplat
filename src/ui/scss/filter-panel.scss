@@ -1,0 +1,142 @@
+@use 'colors.scss' as *;
+
+#filter-panel {
+    top: 50%;
+    transform: translate(0, -50%);
+    right: 102px;
+    width: 320px;
+    flex-direction: column;
+    pointer-events: auto;
+
+    &:not(.pcui-hidden) {
+        display: flex;
+    }
+}
+
+#filter-panel > .filter-panel-tabs {
+    display: flex;
+    flex-direction: row;
+    padding: 2px;
+    background-color: $bcg-primary;
+}
+
+#filter-panel .filter-panel-tab {
+    flex: 1;
+    height: 24px;
+    line-height: 24px;
+    margin: 0px 1px;
+    border-radius: 3px;
+    text-align: center;
+    color: $text-secondary;
+    background-color: $bcg-dark;
+    cursor: pointer;
+
+    &:hover {
+        color: $text-primary;
+        background-color: $bcg-darkest;
+    }
+
+    &.active {
+        color: $clr-hilight;
+        background-color: $bcg-darkest;
+        font-weight: bold;
+    }
+}
+
+#filter-panel > .filter-panel-rows {
+    display: flex;
+    flex-direction: column;
+}
+
+#filter-panel .filter-panel-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2px;
+    height: 28px;
+}
+
+#filter-panel .filter-panel-row-label {
+    flex-grow: 1;
+    color: $text-primary;
+    padding-left: 4px;
+}
+
+#filter-panel .filter-panel-input {
+    width: 126px;
+    height: 24px;
+    box-sizing: border-box;
+    margin: 0px;
+    padding: 2px 6px;
+    border: 1px solid $bcg-lighter;
+    border-radius: 3px;
+    background-color: $bcg-darkest;
+    color: $text-primary;
+    outline: none;
+    user-select: text;
+
+    &:focus {
+        border-color: $clr-hilight;
+    }
+}
+
+#filter-panel > .filter-panel-stats {
+    min-height: 24px;
+    line-height: 16px;
+    padding: 5px 6px;
+    white-space: normal;
+    color: $text-secondary;
+    background-color: $bcg-darkest;
+}
+
+#filter-panel > .filter-panel-control-row {
+    display: flex;
+    flex-direction: row;
+    gap: 2px;
+    padding: 2px;
+    background-color: $bcg-dark;
+}
+
+#filter-panel .filter-panel-button {
+    flex: 1;
+    height: 26px;
+    line-height: 26px;
+    margin: 0px;
+    padding: 0px 4px;
+    border-radius: 3px;
+    text-align: center;
+    color: $text-primary;
+    background-color: $bcg-primary;
+    cursor: pointer;
+
+    &:hover {
+        background-color: $bcg-darkest;
+        color: $clr-hilight;
+    }
+
+    &.primary {
+        color: white;
+        background-color: #2d6cdf;
+
+        &:hover {
+            background-color: #3f7df0;
+        }
+    }
+
+    &.danger {
+        color: white;
+        background-color: #8c2d2d;
+
+        &:hover {
+            background-color: #bd3c3c;
+        }
+    }
+}
+
+
+#filter-panel .filter-panel-checkbox {
+    width: 18px;
+    height: 18px;
+    margin-right: 4px;
+    accent-color: #2d6cdf;
+}

@@ -1,0 +1,100 @@
+@use 'colors.scss' as *;
+
+#plane-panel {
+    top: 50%;
+    transform: translate(0, -50%);
+    right: 102px;
+    width: 320px;
+    flex-direction: column;
+    pointer-events: auto;
+
+    &:not(.pcui-hidden) {
+        display: flex;
+    }
+}
+
+#plane-panel .plane-panel-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2px;
+    height: 28px;
+}
+
+#plane-panel .plane-panel-row-label {
+    flex-grow: 1;
+    color: $text-primary;
+    padding-left: 4px;
+}
+
+#plane-panel .plane-panel-input {
+    width: 126px;
+    height: 24px;
+    box-sizing: border-box;
+    margin: 0px;
+    padding: 2px 6px;
+    border: 1px solid $bcg-lighter;
+    border-radius: 3px;
+    background-color: $bcg-darkest;
+    color: $text-primary;
+    outline: none;
+    user-select: text;
+
+    &:focus {
+        border-color: $clr-hilight;
+    }
+}
+
+#plane-panel > .plane-panel-control-row {
+    display: flex;
+    flex-direction: row;
+    gap: 2px;
+    padding: 2px;
+    background-color: $bcg-dark;
+}
+
+#plane-panel .plane-panel-button {
+    flex: 1;
+    height: 26px;
+    line-height: 26px;
+    margin: 0px;
+    padding: 0px 2px;
+    border-radius: 3px;
+    text-align: center;
+    color: $text-primary;
+    background-color: $bcg-primary;
+    cursor: pointer;
+    font-size: 11px;
+
+    &:hover {
+        background-color: $bcg-darkest;
+        color: $clr-hilight;
+    }
+
+    &.primary {
+        color: white;
+        background-color: #2d6cdf;
+
+        &:hover {
+            background-color: #3f7df0;
+        }
+    }
+
+    &.danger {
+        color: white;
+        background-color: #8c2d2d;
+
+        &:hover {
+            background-color: #bd3c3c;
+        }
+    }
+}
+
+#plane-panel > .plane-panel-stats {
+    min-height: 24px;
+    line-height: 16px;
+    padding: 5px 6px;
+    white-space: normal;
+    color: $text-secondary;
+    background-color: $bcg-darkest;
+}

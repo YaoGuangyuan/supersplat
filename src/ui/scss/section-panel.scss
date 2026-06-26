@@ -1,0 +1,168 @@
+@use 'colors.scss' as *;
+
+#section-panel {
+    top: 50%;
+    transform: translate(0, -50%);
+    right: 102px;
+    width: 320px;
+    flex-direction: column;
+    pointer-events: auto;
+
+    &:not(.pcui-hidden) {
+        display: flex;
+    }
+}
+
+#section-panel .section-panel-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2px;
+    height: 28px;
+}
+
+#section-panel .section-panel-row-label {
+    flex-grow: 1;
+    color: $text-primary;
+    padding-left: 4px;
+}
+
+#section-panel .section-panel-input {
+    width: 126px;
+    height: 24px;
+    box-sizing: border-box;
+    margin: 0px;
+    padding: 2px 6px;
+    border: 1px solid $bcg-lighter;
+    border-radius: 3px;
+    background-color: $bcg-darkest;
+    color: $text-primary;
+    outline: none;
+    user-select: text;
+
+    &:focus {
+        border-color: $clr-hilight;
+    }
+}
+
+#section-panel .section-topview-canvas {
+    width: 300px;
+    height: 220px;
+    margin: 4px 10px;
+    border: 1px solid $bcg-lighter;
+    border-radius: 3px;
+    background-color: $bcg-darkest;
+    cursor: crosshair;
+}
+
+#section-panel > .section-panel-control-row {
+    display: flex;
+    flex-direction: row;
+    gap: 2px;
+    padding: 2px;
+    background-color: $bcg-dark;
+}
+
+#section-panel .section-panel-button {
+    flex: 1;
+    height: 26px;
+    line-height: 26px;
+    margin: 0px;
+    padding: 0px 2px;
+    border-radius: 3px;
+    text-align: center;
+    color: $text-primary;
+    background-color: $bcg-primary;
+    cursor: pointer;
+    font-size: 11px;
+
+    &:hover {
+        background-color: $bcg-darkest;
+        color: $clr-hilight;
+    }
+
+    &.primary {
+        color: white;
+        background-color: #2d6cdf;
+
+        &:hover {
+            background-color: #3f7df0;
+        }
+    }
+
+    &.danger {
+        color: white;
+        background-color: #8c2d2d;
+
+        &:hover {
+            background-color: #bd3c3c;
+        }
+    }
+}
+
+#section-panel > .section-panel-stats {
+    min-height: 24px;
+    line-height: 16px;
+    padding: 5px 6px;
+    white-space: normal;
+    color: $text-secondary;
+    background-color: $bcg-darkest;
+}
+
+#section-viewer-panel {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    width: 780px;
+    height: 480px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    background-color: $bcg-dark;
+    border: 1px solid $bcg-lighter;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+    pointer-events: auto;
+    user-select: none;
+
+    &[hidden] {
+        display: none;
+    }
+}
+
+#section-viewer-panel .section-viewer-header {
+    height: 32px;
+    line-height: 32px;
+    padding: 0px 8px;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    color: $text-primary;
+    background-color: $bcg-primary;
+    font-weight: bold;
+}
+
+#section-viewer-panel .section-viewer-close {
+    cursor: pointer;
+    color: $text-secondary;
+
+    &:hover {
+        color: $clr-hilight;
+    }
+}
+
+#section-viewer-panel .section-viewer-canvas {
+    width: 760px;
+    height: 420px;
+    margin: 8px 10px 0px 10px;
+    border: 1px solid $bcg-lighter;
+    background-color: $bcg-darkest;
+    cursor: crosshair;
+}
+
+#section-viewer-panel .section-viewer-stats {
+    height: 20px;
+    line-height: 20px;
+    padding: 0px 10px;
+    color: $text-secondary;
+    font-size: 11px;
+}

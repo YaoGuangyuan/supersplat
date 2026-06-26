@@ -27,6 +27,10 @@ import { ViewCube } from './view-cube';
 import { ViewPanel } from './view-panel';
 import { version } from '../../package.json';
 
+import { FilterPanel } from './filter-panel';
+import { PlanePanel } from './plane-panel';
+import { SectionPanel } from './section-panel';
+
 // ts compiler and vscode find this type, but eslint does not
 type FilePickerAcceptType = unknown;
 
@@ -127,6 +131,9 @@ class EditorUI {
         const rightToolbar = new RightToolbar(events, tooltips);
         const modeToggle = new ModeToggle(events, tooltips);
         const menu = new Menu(events);
+        const filterPanel = new FilterPanel(events, tooltips);
+        const planePanel = new PlanePanel(events, tooltips);
+        const sectionPanel = new SectionPanel(events, tooltips);
 
         canvasContainer.dom.appendChild(canvas);
         canvasContainer.append(appLabel);
@@ -139,6 +146,9 @@ class EditorUI {
         canvasContainer.append(rightToolbar);
         canvasContainer.append(modeToggle);
         canvasContainer.append(menu);
+        canvasContainer.append(filterPanel);
+        canvasContainer.append(planePanel);
+        canvasContainer.append(sectionPanel);
 
         // view axes container
         const viewCube = new ViewCube(events);
