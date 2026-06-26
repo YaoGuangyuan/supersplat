@@ -13,8 +13,13 @@ type SplatLike = {
 type SectionSettings = {
     topAxes: string;
     thickness: number;
+    sideMode: string;
     scope: string;
     maxDisplayPoints: number;
+    interactiveMaxDisplayPoints: number;
+    renderMode: string;
+    pointSize: number;
+    pixelCellSize: number;
 };
 
 type TopBounds = {
@@ -84,8 +89,13 @@ const SH_C0 = 0.28209479177387814;
 const DEFAULT_SECTION_SETTINGS: SectionSettings = {
     topAxes: 'xy',
     thickness: 1.0,
+    sideMode: 'both',
     scope: 'all',
-    maxDisplayPoints: 12000
+    maxDisplayPoints: 50000,
+    interactiveMaxDisplayPoints: 12000,
+    renderMode: 'color',
+    pointSize: 1,
+    pixelCellSize: 2
 };
 
 const finiteNumber = (v: unknown, fallback: number) => {
@@ -220,8 +230,13 @@ class SectionPanel extends Container {
     private events: Events;
     private topAxesInput!: HTMLSelectElement;
     private thicknessInput!: HTMLInputElement;
+    private sideModeInput!: HTMLSelectElement;
     private scopeInput!: HTMLSelectElement;
     private maxDisplayInput!: HTMLInputElement;
+    private interactiveMaxDisplayInput!: HTMLInputElement;
+    private renderModeInput!: HTMLSelectElement;
+    private pointSizeInput!: HTMLInputElement;
+    private pixelCellSizeInput!: HTMLInputElement;
     private topCanvas: HTMLCanvasElement;
     private viewerDom: HTMLDivElement;
     private viewerCanvas: HTMLCanvasElement;
@@ -232,6 +247,7 @@ class SectionPanel extends Container {
     private topDrawData: TopDrawData | null = null;
     private sectionLine: SectionLine | null = null;
     private drawingPoint = 0;
+    private pickingWidth = false;
     private viewerData: SectionViewerData | null = null;
     private viewerView: SectionViewBounds | null = null;
     private viewerSelectionMask: Uint8Array | null = null;
@@ -239,6 +255,7 @@ class SectionPanel extends Container {
     private viewerDrag: DragState | null = null;
     private topRenderPending = false;
     private viewerRenderPending = false;
+    private viewerInteractiveUntil = 0;
     private suppressNextDeleteRefresh = false;
     private lastMask: Uint8Array | null = null;
     private lastPreviewCount = 0;
@@ -437,12 +454,25 @@ class SectionPanel extends Container {
             { value: 'yz', text: 'YZ top / X height' }
         ], 'Choose which two axes form the TopView plane. The remaining axis is vertical in section view.');
 
-        this.thicknessInput = this.makeInputRow('Thickness', String(settings.thickness), 'Corridor width around the line. Points within half this width are included.');
+        this.thicknessInput = this.makeInputRow('Thickness', String(settings.thickness), 'Section thickness/depth. Centered mode uses total width. Left/Right side modes use one-sided depth.');
+        this.sideModeInput = this.makeSelectRow('Thickness side', settings.sideMode || 'both', [
+            { value: 'both', text: 'Centered / both sides' },
+            { value: 'left', text: 'Left side only' },
+            { value: 'right', text: 'Right side only' }
+        ], 'Centered includes both sides of the section line. Left/Right modes include only one side of the line direction.');
+
         this.scopeInput = this.makeSelectRow('Scope', settings.scope, [
             { value: 'all', text: 'Whole splat' },
             { value: 'selected', text: 'Current selection' }
         ], 'Use Current selection to draw/build from a rough selected area only.');
-        this.maxDisplayInput = this.makeInputRow('Max display', String(settings.maxDisplayPoints), 'Maximum number of points drawn in the section viewer.');
+        this.maxDisplayInput = this.makeInputRow('Max display', String(settings.maxDisplayPoints || DEFAULT_SECTION_SETTINGS.maxDisplayPoints), 'Maximum visible representative points when idle. Selection still uses all section data.');
+        this.interactiveMaxDisplayInput = this.makeInputRow('Drag display', String(settings.interactiveMaxDisplayPoints || DEFAULT_SECTION_SETTINGS.interactiveMaxDisplayPoints), 'Maximum visible representative points while panning, zooming, or drag-selecting.');
+        this.renderModeInput = this.makeSelectRow('Render mode', settings.renderMode || DEFAULT_SECTION_SETTINGS.renderMode, [
+            { value: 'color', text: 'Adaptive color' },
+            { value: 'fast', text: 'Adaptive mono / faster' }
+        ], 'Adaptive color always displays point colors. Adaptive mono is faster for very large sections. Selection is always exact.');
+        this.pointSizeInput = this.makeInputRow('Point size', String(settings.pointSize || DEFAULT_SECTION_SETTINGS.pointSize), 'Canvas point size in pixels. 1 is fastest.');
+        this.pixelCellSizeInput = this.makeInputRow('Pixel gap', String(settings.pixelCellSize || DEFAULT_SECTION_SETTINGS.pixelCellSize), 'Screen pixel grid size. 1 shows most detail; 2~3 is faster. Selection is always exact.');
 
         this.topCanvas = document.createElement('canvas');
         this.topCanvas.width = 300;
@@ -461,15 +491,28 @@ class SectionPanel extends Container {
         const fitTop = this.makeButton('Fit Top');
         fitTop.addEventListener('click', () => this.fitTopView());
 
+        const pickWidth = this.makeButton('Pick Width');
+        pickWidth.title = 'After drawing the section line, click a point in TopView to set thickness like a section tool.';
+        pickWidth.addEventListener('click', () => {
+            if (!this.sectionLine || this.drawingPoint !== 0) {
+                this.statsDom.textContent = 'Draw the section line first, then click Pick Width.';
+                return;
+            }
+
+            this.pickingWidth = true;
+            this.statsDom.textContent = 'Pick Width mode: click beside the section line to set thickness/depth.';
+        });
+
         const clearLine = this.makeButton('Clear Line');
         clearLine.addEventListener('click', () => {
             this.sectionLine = null;
             this.drawingPoint = 0;
+            this.pickingWidth = false;
             this.drawTopView();
             this.statsDom.textContent = 'Line cleared. Click two points in TopView.';
         });
 
-        this.makeControlRow([refresh, fitTop, clearLine]);
+        this.makeControlRow([refresh, fitTop, pickWidth, clearLine]);
 
         const build = this.makeButton('Build View', 'primary');
         build.title = 'Build the profile view in a separate floating window.';
@@ -506,8 +549,13 @@ class SectionPanel extends Container {
         const settings: SectionSettings = {
             topAxes: this.topAxesInput.value || DEFAULT_SECTION_SETTINGS.topAxes,
             thickness: Math.max(0.000001, finiteNumber(this.thicknessInput.value, DEFAULT_SECTION_SETTINGS.thickness)),
+            sideMode: this.sideModeInput?.value || DEFAULT_SECTION_SETTINGS.sideMode,
             scope: this.scopeInput.value || DEFAULT_SECTION_SETTINGS.scope,
-            maxDisplayPoints: Math.max(100, Math.floor(finiteNumber(this.maxDisplayInput.value, DEFAULT_SECTION_SETTINGS.maxDisplayPoints)))
+            maxDisplayPoints: Math.max(100, Math.floor(finiteNumber(this.maxDisplayInput.value, DEFAULT_SECTION_SETTINGS.maxDisplayPoints))),
+            interactiveMaxDisplayPoints: Math.max(100, Math.floor(finiteNumber(this.interactiveMaxDisplayInput?.value, DEFAULT_SECTION_SETTINGS.interactiveMaxDisplayPoints))),
+            renderMode: this.renderModeInput?.value || DEFAULT_SECTION_SETTINGS.renderMode,
+            pointSize: Math.max(0.5, Math.min(4, finiteNumber(this.pointSizeInput?.value, DEFAULT_SECTION_SETTINGS.pointSize))),
+            pixelCellSize: Math.max(1, Math.min(8, Math.floor(finiteNumber(this.pixelCellSizeInput?.value, DEFAULT_SECTION_SETTINGS.pixelCellSize))))
         };
 
         saveJson('supersplat.sectionLine.settings', settings);
@@ -731,6 +779,10 @@ class SectionPanel extends Container {
         });
     }
 
+    private markViewerInteractive() {
+        this.viewerInteractiveUntil = performance.now() + 180;
+    }
+
     private scheduleSectionViewerRender() {
         if (this.viewerRenderPending) return;
 
@@ -739,6 +791,81 @@ class SectionPanel extends Container {
             this.viewerRenderPending = false;
             this.renderSectionViewer();
         });
+    }
+
+    private getLineMeasure(a: number, b: number) {
+        if (!this.sectionLine) return null;
+
+        const da = this.sectionLine.a1 - this.sectionLine.a0;
+        const db = this.sectionLine.b1 - this.sectionLine.b0;
+        const len = Math.sqrt(da * da + db * db);
+
+        if (len < 1e-9) return null;
+
+        const ua = da / len;
+        const ub = db / len;
+        const va = a - this.sectionLine.a0;
+        const vb = b - this.sectionLine.b0;
+
+        return {
+            len,
+            ua,
+            ub,
+            along: va * ua + vb * ub,
+            perp: va * -ub + vb * ua
+        };
+    }
+
+    private sectionPointAllowed(perp: number, thickness: number, sideMode: string) {
+        const safeThickness = Math.max(0.000001, thickness);
+
+        if (sideMode === 'left') {
+            return perp >= 0 && perp <= safeThickness;
+        }
+
+        if (sideMode === 'right') {
+            return perp <= 0 && perp >= -safeThickness;
+        }
+
+        return Math.abs(perp) <= safeThickness * 0.5;
+    }
+
+    private drawSectionCorridor(ctx: CanvasRenderingContext2D, settings: SectionSettings) {
+        if (!this.sectionLine) return;
+
+        const da = this.sectionLine.a1 - this.sectionLine.a0;
+        const db = this.sectionLine.b1 - this.sectionLine.b0;
+        const len = Math.sqrt(da * da + db * db);
+
+        if (len < 1e-9) return;
+
+        const ua = da / len;
+        const ub = db / len;
+        const na = -ub;
+        const nb = ua;
+        const offsets = settings.sideMode === 'left'
+            ? [0, settings.thickness]
+            : settings.sideMode === 'right'
+                ? [0, -settings.thickness]
+                : [-settings.thickness * 0.5, settings.thickness * 0.5];
+
+        ctx.save();
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = '#f0c674';
+        ctx.lineWidth = 1;
+
+        for (let i = 0; i < offsets.length; i++) {
+            const o = offsets[i];
+            const p0 = this.worldToCanvas(this.sectionLine.a0 + na * o, this.sectionLine.b0 + nb * o);
+            const p1 = this.worldToCanvas(this.sectionLine.a1 + na * o, this.sectionLine.b1 + nb * o);
+
+            ctx.beginPath();
+            ctx.moveTo(p0.x, p0.y);
+            ctx.lineTo(p1.x, p1.y);
+            ctx.stroke();
+        }
+
+        ctx.restore();
     }
 
     private drawTopView(
@@ -756,7 +883,8 @@ class SectionPanel extends Container {
             x = this.topDrawData.x;
             y = this.topDrawData.y;
             z = this.topDrawData.z;
-            settings = this.topDrawData.settings;
+            settings = this.getSettings();
+            this.topDrawData.settings = settings;
         }
 
         ctx.clearRect(0, 0, this.topCanvas.width, this.topCanvas.height);
@@ -792,6 +920,10 @@ class SectionPanel extends Container {
             }
         }
 
+        if (this.sectionLine && settings) {
+            this.drawSectionCorridor(ctx, settings);
+        }
+
         if (this.sectionLine) {
             const p0 = this.worldToCanvas(this.sectionLine.a0, this.sectionLine.b0);
             const p1 = this.worldToCanvas(this.sectionLine.a1, this.sectionLine.b1);
@@ -816,7 +948,7 @@ class SectionPanel extends Container {
         ctx.fillStyle = '#8b96a3';
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText('Wheel: zoom | Shift/right drag: pan', 8, this.topCanvas.height - 8);
+        ctx.fillText('Wheel: zoom | Shift/right drag: pan | Pick Width: set thickness', 8, this.topCanvas.height - 8);
     }
 
     private handleTopCanvasClick(event: MouseEvent) {
@@ -834,6 +966,33 @@ class SectionPanel extends Container {
         const rect = this.topCanvas.getBoundingClientRect();
         const p = this.canvasToWorld(event.clientX - rect.left, event.clientY - rect.top);
         if (!p) return;
+
+        if (this.pickingWidth && this.sectionLine && this.drawingPoint === 0) {
+            const measure = this.getLineMeasure(p.a, p.b);
+            if (!measure) {
+                this.statsDom.textContent = 'Section line is too short. Draw the line again.';
+                return;
+            }
+
+            const sideMode = this.sideModeInput?.value || 'both';
+            const distance = Math.abs(measure.perp);
+            const thickness = sideMode === 'both' ? distance * 2 : distance;
+
+            this.thicknessInput.value = String(Number(Math.max(0.000001, thickness).toFixed(6)));
+            this.pickingWidth = false;
+
+            const sideText = sideMode === 'both'
+                ? `centered total width = ${this.thicknessInput.value}`
+                : `${sideMode} side depth = ${this.thicknessInput.value}`;
+
+            if (this.topDrawData) {
+                this.topDrawData.settings = this.getSettings();
+            }
+
+            this.statsDom.textContent = `Thickness picked from TopView: ${sideText}. Click Build View.`;
+            this.drawTopView();
+            return;
+        }
 
         if (!this.sectionLine || this.drawingPoint === 0) {
             this.sectionLine = {
@@ -879,7 +1038,6 @@ class SectionPanel extends Container {
 
         const ua = da / len;
         const ub = db / len;
-        const half = settings.thickness * 0.5;
         const mask = new Uint8Array(state ? state.length : x.length);
         const points: SectionPoint[] = [];
 
@@ -897,7 +1055,7 @@ class SectionPanel extends Container {
             const along = va * ua + vb * ub;
             const perp = va * -ub + vb * ua;
 
-            if (along < 0 || along > len || Math.abs(perp) > half) {
+            if (along < 0 || along > len || !this.sectionPointAllowed(perp, settings.thickness, settings.sideMode || 'both')) {
                 continue;
             }
 
@@ -1019,6 +1177,17 @@ class SectionPanel extends Container {
             return;
         }
 
+        // Pull latest viewer-only settings without recomputing the section data.
+        const uiSettings = this.getSettings();
+        data.settings = {
+            ...data.settings,
+            maxDisplayPoints: uiSettings.maxDisplayPoints,
+            interactiveMaxDisplayPoints: uiSettings.interactiveMaxDisplayPoints,
+            renderMode: uiSettings.renderMode,
+            pointSize: uiSettings.pointSize,
+            pixelCellSize: uiSettings.pixelCellSize
+        };
+
         ctx.fillStyle = '#8b96a3';
         ctx.font = '11px sans-serif';
         ctx.textAlign = 'left';
@@ -1029,28 +1198,115 @@ class SectionPanel extends Container {
         ctx.fillText(`height (${data.settings.topAxes === 'xy' ? 'Z' : data.settings.topAxes === 'xz' ? 'Y' : 'X'})`, 0, 0);
         ctx.restore();
 
-        const maxDraw = Math.min(data.points.length, data.settings.maxDisplayPoints);
-        const stride = Math.max(1, Math.floor(data.points.length / maxDraw));
+        const interactive = !!this.viewerDrag || performance.now() < this.viewerInteractiveUntil;
+        const drawLimit = interactive
+            ? Math.min(data.points.length, data.settings.interactiveMaxDisplayPoints || 12000)
+            : Math.min(data.points.length, data.settings.maxDisplayPoints || 50000);
 
-        for (let i = 0; i < data.points.length; i += stride) {
+        const pointSize = Math.max(0.5, Math.min(4, data.settings.pointSize || 1));
+        const pixelCellSize = Math.max(1, Math.min(8, Math.floor(data.settings.pixelCellSize || 2)));
+        const colorRender = data.settings.renderMode === 'color';
+
+        // Adaptive screen-grid render:
+        // - It does NOT limit selection data.
+        // - It only avoids drawing multiple points into the same small screen cell.
+        // - When zoomed in, the same point cloud occupies more screen cells, so more real points become visible.
+        const gridW = Math.max(1, Math.ceil(w / pixelCellSize));
+        const gridH = Math.max(1, Math.ceil(h / pixelCellSize));
+        const occupied = new Uint8Array(gridW * gridH);
+
+        // While dragging, use a gentle scan stride for responsiveness.
+        // At idle, scan all points until the visible-cell/draw limit is reached.
+        const scanStride = interactive && data.points.length > drawLimit * 8
+            ? Math.max(1, Math.floor(data.points.length / (drawLimit * 8)))
+            : 1;
+
+        let drawn = 0;
+        let scannedVisible = 0;
+
+        if (!colorRender) {
+            ctx.fillStyle = interactive ? '#8f99a6' : '#b7c0cc';
+        }
+
+        for (let i = 0; i < data.points.length && drawn < drawLimit; i += scanStride) {
             const p = data.points[i];
 
             if (p.along < view.minAlong || p.along > view.maxAlong || p.height < view.minHeight || p.height > view.maxHeight) {
                 continue;
             }
 
+            scannedVisible++;
             const c = this.sectionToViewerCanvas(p.along, p.height);
-            const selected = this.viewerSelectionMask && this.viewerSelectionMask[p.index];
 
-            if (selected) {
-                ctx.fillStyle = '#ffff66';
-                ctx.fillRect(c.x - 1.5, c.y - 1.5, 3, 3);
-            } else {
+            if (c.x < marginLeft || c.x > w - marginRight || c.y < marginTop || c.y > h - marginBottom) {
+                continue;
+            }
+
+            const gx = Math.max(0, Math.min(gridW - 1, Math.floor(c.x / pixelCellSize)));
+            const gy = Math.max(0, Math.min(gridH - 1, Math.floor(c.y / pixelCellSize)));
+            const key = gy * gridW + gx;
+
+            if (occupied[key]) {
+                continue;
+            }
+
+            occupied[key] = 1;
+
+            if (colorRender) {
                 const rr = Math.round(p.r * 255);
                 const gg = Math.round(p.g * 255);
                 const bb = Math.round(p.b * 255);
                 ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
-                ctx.fillRect(c.x, c.y, 1.5, 1.5);
+            }
+
+            ctx.fillRect(c.x, c.y, pointSize, pointSize);
+            drawn++;
+        }
+
+        // Draw selected points on top as a separate adaptive overlay.
+        // Important: this overlay is recomputed from the FULL selected mask on every
+        // zoom/pan redraw. So if many selected points overlapped in a wide view,
+        // zooming in will reveal/highlight more of them.
+        let selectedDrawn = 0;
+        let selectedVisible = 0;
+
+        if (this.viewerSelectionMask) {
+            ctx.fillStyle = '#ffff66';
+
+            // Selection highlight uses a denser grid than the base cloud. This keeps
+            // selection feedback accurate while still avoiding multiple highlights in
+            // the exact same screen pixel.
+            const selectedCellSize = Math.max(1, Math.min(3, Math.floor(pixelCellSize * 0.5) || 1));
+            const selectedGridW = Math.max(1, Math.ceil(w / selectedCellSize));
+            const selectedGridH = Math.max(1, Math.ceil(h / selectedCellSize));
+            const selectedOccupied = new Uint8Array(selectedGridW * selectedGridH);
+
+            // Much higher cap than base drawing. Selection feedback should prioritize
+            // showing what is selected, especially after zooming into a selected region.
+            const selectedLimit = Math.min(
+                selectedGridW * selectedGridH,
+                interactive ? Math.max(50000, drawLimit * 4) : Math.max(120000, drawLimit * 4)
+            );
+
+            for (let i = 0; i < data.points.length && selectedDrawn < selectedLimit; i++) {
+                const p = data.points[i];
+                if (!this.viewerSelectionMask[p.index]) continue;
+                if (p.along < view.minAlong || p.along > view.maxAlong || p.height < view.minHeight || p.height > view.maxHeight) continue;
+
+                selectedVisible++;
+
+                const c = this.sectionToViewerCanvas(p.along, p.height);
+                if (c.x < marginLeft || c.x > w - marginRight || c.y < marginTop || c.y > h - marginBottom) continue;
+
+                const gx = Math.max(0, Math.min(selectedGridW - 1, Math.floor(c.x / selectedCellSize)));
+                const gy = Math.max(0, Math.min(selectedGridH - 1, Math.floor(c.y / selectedCellSize)));
+                const key = gy * selectedGridW + gx;
+
+                if (selectedOccupied[key]) continue;
+                selectedOccupied[key] = 1;
+
+                ctx.fillRect(c.x - 1.5, c.y - 1.5, 3, 3);
+                selectedDrawn++;
             }
         }
 
@@ -1070,7 +1326,15 @@ class SectionPanel extends Container {
         ctx.fillStyle = '#8b96a3';
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'right';
-        ctx.fillText('Left drag: select | Wheel: zoom | Shift/right drag: pan', w - 12, h - 10);
+        const selectionText = this.viewerSelectionMask
+            ? ` | selected pixels ${selectedDrawn.toLocaleString()}${selectedVisible > selectedDrawn ? ` / visible ${selectedVisible.toLocaleString()}` : ''}`
+            : '';
+
+        ctx.fillText(
+            `${colorRender ? 'Adaptive color' : 'Adaptive mono'} | drawn ${drawn.toLocaleString()} / ${data.points.length.toLocaleString()}${selectionText}`,
+            w - 12,
+            h - 10
+        );
     }
 
     private drawSectionViewer(
@@ -1103,6 +1367,7 @@ class SectionPanel extends Container {
             maxHeight: p.height + (v.maxHeight - p.height) * factor
         };
 
+        this.markViewerInteractive();
         this.scheduleSectionViewerRender();
     }
 
@@ -1135,7 +1400,8 @@ class SectionPanel extends Container {
                 currentX: x,
                 currentY: y
             };
-            this.renderSectionViewer();
+            this.markViewerInteractive();
+            this.scheduleSectionViewerRender();
         }
     }
 
@@ -1158,6 +1424,7 @@ class SectionPanel extends Container {
             maxHeight: start.maxHeight + dHeight
         };
 
+        this.markViewerInteractive();
         this.scheduleSectionViewerRender();
     }
 
@@ -1253,8 +1520,8 @@ class SectionPanel extends Container {
             this.events.fire('select.mask', 'set', mask);
             this.renderSectionViewer();
 
-            this.viewerStatsDom.textContent = `Selected in section view: ${count.toLocaleString()} points. Yellow points are selected in SuperSplat.`;
-            this.statsDom.textContent = `Section view selection: ${count.toLocaleString()} points.`;
+            this.viewerStatsDom.textContent = `Selected in section view: ${count.toLocaleString()} points from full section data. Yellow pixels refresh when you zoom/pan.`;
+            this.statsDom.textContent = `Exact section selection: ${count.toLocaleString()} points. Zoom/pan refreshes selected pixels.`;
         } finally {
             this.events.fire('progressEnd');
         }
@@ -1275,6 +1542,7 @@ class SectionPanel extends Container {
             const rect = this.viewerCanvas.getBoundingClientRect();
             this.viewerDrag.currentX = event.clientX - rect.left;
             this.viewerDrag.currentY = event.clientY - rect.top;
+            this.markViewerInteractive();
             this.scheduleSectionViewerRender();
         }
     }
@@ -1335,7 +1603,7 @@ class SectionPanel extends Container {
 
             this.viewerStatsDom.textContent =
                 `slice: ${section.count.toLocaleString()} / ${candidates.length.toLocaleString()} | ` +
-                `length: ${section.length.toFixed(3)} | thickness: ${settings.thickness} | left drag to select, wheel to zoom`;
+                `length: ${section.length.toFixed(3)} | thickness: ${settings.thickness} | side: ${settings.sideMode || 'both'} | left drag to select, wheel to zoom`;
 
             this.statsDom.textContent =
                 `Section view built: ${section.count.toLocaleString()} points. Drag-select in the section window or use Select Slice.`;
