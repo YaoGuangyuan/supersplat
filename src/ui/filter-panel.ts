@@ -45,6 +45,14 @@ type FilterResult = {
     reasonCounts: Record<string, number>;
 };
 
+type VoxelCell = {
+    ix: number;
+    iy: number;
+    iz: number;
+    count: number;
+    indices: number[];
+};
+
 type FilterMode = 'outlier' | 'blackArtifact' | 'pointCloud';
 
 const GS_STATE = {
