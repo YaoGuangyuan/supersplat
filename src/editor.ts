@@ -577,6 +577,88 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
     });
 
+    events.function('pick.point', async (point: { x: number, y: number }) => {
+        const targetSize = scene.targetSize;
+        if (!targetSize || !point) {
+            return null;
+        }
+
+        const { width, height } = targetSize;
+        if (!width || !height) {
+            return null;
+        }
+
+        const mode = events.invoke('camera.mode');
+
+        for (const splat of selectedSplats()) {
+            const splatData = splat.splatData;
+
+            if (mode === 'centers') {
+                const x = splatData.getProp('x') as Float32Array;
+                const y = splatData.getProp('y') as Float32Array;
+                const z = splatData.getProp('z') as Float32Array;
+
+                const splatSize = events.invoke('camera.splatSize');
+                const camera = scene.camera.camera;
+                const sx = point.x * width;
+                const sy = point.y * height;
+                let bestId = -1;
+                let bestDist2 = Number.POSITIVE_INFINITY;
+
+                mat.mul2(camera.camera._viewProjMat, splat.worldTransform);
+
+                for (let i = 0; i < splatData.numSplats; i++) {
+                    vec4.set(x[i], y[i], z[i], 1.0);
+                    mat.transformVec4(vec4, vec4);
+                    const px = (vec4.x / vec4.w * 0.5 + 0.5) * width;
+                    const py = (-vec4.y / vec4.w * 0.5 + 0.5) * height;
+                    const dx = px - sx;
+                    const dy = py - sy;
+
+                    if (Math.abs(dx) < splatSize && Math.abs(dy) < splatSize) {
+                        const dist2 = dx * dx + dy * dy;
+                        if (dist2 < bestDist2) {
+                            bestDist2 = dist2;
+                            bestId = i;
+                        }
+                    }
+                }
+
+                if (bestId >= 0) {
+                    return bestId;
+                }
+            } else if (mode === 'rings') {
+                scene.camera.pickPrep(splat, 'set');
+
+                const pickResult = await scene.camera.pickRect(
+                    point.x,
+                    point.y,
+                    1 / width,
+                    1 / height
+                );
+                const pickId = pickResult?.[0];
+                if (pickId !== undefined && pickId !== 0xffffffff) {
+                    return pickId;
+                }
+            }
+        }
+
+        return null;
+    });
+
+    events.function('select.singlePoint', async (op: 'add'|'remove'|'set'|'intersect', point: { x: number, y: number }) => {
+        const pickId = await events.invoke('pick.point', point) as number | null;
+        if (pickId === null || pickId === undefined) {
+            return false;
+        }
+
+        for (const splat of selectedSplats()) {
+            await editHistory.add(new SelectOp(splat, op, new Uint32Array([pickId])));
+        }
+
+        return true;
+    });
+
     // Eyedropper selection with SelectOp so undo/redo and selection state updates remain consistent.
     // Threshold acts as a per-channel absolute difference: 0 only matches identical colors while 1 matches everything.
     // TO DO:
