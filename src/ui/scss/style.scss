@@ -7,7 +7,10 @@
 @use 'scene-panel.scss';
 @use 'settings-panel.scss';
 @use 'color-panel.scss';
+@use 'filter-panel.scss';
+@use 'plane-panel.scss';
 @use 'splat-list.scss';
+@use 'section-panel.scss';
 @use 'transform.scss';
 @use 'bottom-toolbar.scss';
 @use 'right-toolbar.scss';
@@ -175,12 +178,17 @@ body {
 #mask-canvas {
     display: none;
     position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
     opacity: 0.4;
 }
 
 #canvas-container {
     width: 100%;
     display: flex;
+    position: relative;
     border: 0;
     padding: 0;
     margin: 0;
@@ -190,8 +198,10 @@ body {
 #tools-container {
     display: none;
     position: absolute;
-    width: 100%;
-    height: 100%;
+    left: 0;
+    top: 0;
+    right: var(--canvas-overlay-right, 0px);
+    bottom: 0;
     cursor: crosshair;
     &.noevents {
         pointer-events: none;

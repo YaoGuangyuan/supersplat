@@ -3,6 +3,8 @@ import { Button, Element, Container } from '@playcanvas/pcui';
 import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
+import colorPanelSvg from './svg/color-panel.svg';
+import cropSvg from './svg/crop.svg';
 import measureSvg from './svg/measure.svg';
 import orientSvg from './svg/orient.svg';
 import redoSvg from './svg/redo.svg';
@@ -16,7 +18,6 @@ import sphereSvg from './svg/select-sphere.svg';
 import boxSvg from './svg/show-hide-splats.svg';
 import undoSvg from './svg/undo.svg';
 import { Tooltips } from './tooltips';
-// import cropSvg from './svg/crop.svg';
 
 const createSvg = (svgString: string) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
@@ -46,6 +47,23 @@ class BottomToolbar extends Container {
             id: 'bottom-toolbar-redo',
             class: 'bottom-toolbar-button',
             enabled: false
+        });
+
+        const filter = new Button({
+            id: 'bottom-toolbar-filter',
+            class: 'bottom-toolbar-button'
+        });
+
+        const plane = new Button({
+            id: 'bottom-toolbar-plane',
+            class: 'bottom-toolbar-button',
+            icon: 'E198',
+            hidden: true
+        });
+
+        const section = new Button({
+            id: 'bottom-toolbar-section',
+            class: 'bottom-toolbar-button'
         });
 
         const picker = new Button({
@@ -135,6 +153,8 @@ class BottomToolbar extends Container {
 
         undo.dom.appendChild(createSvg(undoSvg));
         redo.dom.appendChild(createSvg(redoSvg));
+        filter.dom.appendChild(createSvg(colorPanelSvg));
+        section.dom.appendChild(createSvg(cropSvg));
         picker.dom.appendChild(createSvg(pickerSvg));
         polygon.dom.appendChild(createSvg(polygonSvg));
         brush.dom.appendChild(createSvg(brushSvg));
@@ -149,6 +169,10 @@ class BottomToolbar extends Container {
 
         this.append(undo);
         this.append(redo);
+        this.append(new Element({ class: 'bottom-toolbar-separator' }));
+        this.append(filter);
+        this.append(plane);
+        this.append(section);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(picker);
         this.append(lasso);
@@ -172,6 +196,9 @@ class BottomToolbar extends Container {
 
         undo.dom.addEventListener('click', () => events.fire('edit.undo'));
         redo.dom.addEventListener('click', () => events.fire('edit.redo'));
+        filter.dom.addEventListener('click', () => events.fire('filter.toggle'));
+        plane.dom.addEventListener('click', () => events.fire('plane.toggle'));
+        section.dom.addEventListener('click', () => events.fire('section.toggle'));
         polygon.dom.addEventListener('click', () => events.fire('tool.polygonSelection'));
         lasso.dom.addEventListener('click', () => events.fire('tool.lassoSelection'));
         brush.dom.addEventListener('click', () => events.fire('tool.brushSelection'));
@@ -238,6 +265,9 @@ class BottomToolbar extends Container {
         // register tooltips
         tooltips.register(undo, tooltip('tooltip.bottom-toolbar.undo', 'edit.undo'));
         tooltips.register(redo, tooltip('tooltip.bottom-toolbar.redo', 'edit.redo'));
+        tooltips.register(filter, () => 'Filter Panel');
+        tooltips.register(plane, () => 'Plane Tool');
+        tooltips.register(section, () => 'Section Tool');
         tooltips.register(picker, tooltip('tooltip.bottom-toolbar.rectangle-selection', 'tool.rectSelection'));
         tooltips.register(lasso, tooltip('tooltip.bottom-toolbar.lasso-selection', 'tool.lassoSelection'));
         tooltips.register(polygon, tooltip('tooltip.bottom-toolbar.polygon-selection', 'tool.polygonSelection'));

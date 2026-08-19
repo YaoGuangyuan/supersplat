@@ -8,16 +8,19 @@ import { BottomToolbar } from './bottom-toolbar';
 import { CameraInfoOverlay } from './camera-info-overlay';
 import { ColorPanel } from './color-panel';
 import { ExportPopup } from './export-popup';
+import { FilterPanel } from './filter-panel';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { i18n } from './localization';
 import { Menu } from './menu';
 import { ModeToggle } from './mode-toggle';
+import { PlanePanel } from './plane-panel';
 import logo from './playcanvas-logo.png';
 import { Popup, ShowOptions } from './popup';
 import { Progress } from './progress';
 import { PublishSettingsDialog } from './publish-settings-dialog';
 import { RightToolbar } from './right-toolbar';
 import { ScenePanel } from './scene-panel';
+import { SectionPanel } from './section-panel';
 import { SettingsPanel } from './settings-panel';
 import { ShortcutsPopup } from './shortcuts-popup';
 import { Spinner } from './spinner';
@@ -95,6 +98,9 @@ class EditorUI {
         const scenePanel = new ScenePanel(events, tooltips);
         const settingsPanel = new SettingsPanel(events, tooltips);
         const colorPanel = new ColorPanel(events, tooltips);
+        const filterPanel = new FilterPanel(events, tooltips);
+        const planePanel = new PlanePanel(events, tooltips);
+        const sectionPanel = new SectionPanel(events, tooltips);
         const bottomToolbar = new BottomToolbar(events, tooltips);
         const rightToolbar = new RightToolbar(events, tooltips);
         const modeToggle = new ModeToggle(events, tooltips);
@@ -108,6 +114,9 @@ class EditorUI {
         canvasContainer.append(scenePanel);
         canvasContainer.append(settingsPanel);
         canvasContainer.append(colorPanel);
+        canvasContainer.append(filterPanel);
+        canvasContainer.append(planePanel);
+        canvasContainer.append(sectionPanel);
         canvasContainer.append(bottomToolbar);
         canvasContainer.append(rightToolbar);
         canvasContainer.append(modeToggle);
@@ -184,6 +193,55 @@ class EditorUI {
         this.canvas = canvas;
         this.popup = popup;
         this.tooltips = tooltips;
+
+        const updateUtilityPanelLayout = () => {
+            const bothVisible = !filterPanel.hidden && !sectionPanel.hidden;
+            const filterButton = document.getElementById('bottom-toolbar-filter');
+            const sectionButton = document.getElementById('bottom-toolbar-section');
+
+            filterButton?.classList.toggle('active', !filterPanel.hidden);
+            sectionButton?.classList.toggle('active', !sectionPanel.hidden);
+
+            canvasContainer.dom.classList.toggle(
+                'tool-panels-side-by-side',
+                bothVisible
+            );
+
+            const composeActive = canvasContainer.dom.classList.contains('section-compose-active');
+            if (!composeActive) {
+                filterPanel.dom.style.right = '';
+                sectionPanel.dom.style.right = '';
+                return;
+            }
+
+            const baseRight = parseFloat(sectionPanel.dom.style.right || window.getComputedStyle(sectionPanel.dom).right);
+            if (!Number.isFinite(baseRight)) {
+                return;
+            }
+
+            const panelGap = 12;
+            const panelWidth = 320;
+            sectionPanel.dom.style.right = `${baseRight}px`;
+            filterPanel.dom.style.right = `${bothVisible ? baseRight + panelWidth + panelGap : baseRight}px`;
+        };
+
+        const toolPanelLayoutObserver = new MutationObserver(() => {
+            updateUtilityPanelLayout();
+        });
+
+        [filterPanel, sectionPanel].forEach((panel) => {
+            toolPanelLayoutObserver.observe(panel.dom, {
+                attributes: true,
+                attributeFilter: ['class', 'hidden']
+            });
+        });
+
+        toolPanelLayoutObserver.observe(canvasContainer.dom, {
+            attributes: true,
+            attributeFilter: ['class']
+        });
+
+        updateUtilityPanelLayout();
 
         document.body.appendChild(appContainer.dom);
         document.body.setAttribute('tabIndex', '-1');
