@@ -54,13 +54,6 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-button'
         });
 
-        const plane = new Button({
-            id: 'bottom-toolbar-plane',
-            class: 'bottom-toolbar-button',
-            icon: 'E198',
-            hidden: true
-        });
-
         const section = new Button({
             id: 'bottom-toolbar-section',
             class: 'bottom-toolbar-button'
@@ -171,7 +164,6 @@ class BottomToolbar extends Container {
         this.append(redo);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(filter);
-        this.append(plane);
         this.append(section);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(picker);
@@ -197,7 +189,6 @@ class BottomToolbar extends Container {
         undo.dom.addEventListener('click', () => events.fire('edit.undo'));
         redo.dom.addEventListener('click', () => events.fire('edit.redo'));
         filter.dom.addEventListener('click', () => events.fire('filter.toggle'));
-        plane.dom.addEventListener('click', () => events.fire('plane.toggle'));
         section.dom.addEventListener('click', () => events.fire('section.toggle'));
         polygon.dom.addEventListener('click', () => events.fire('tool.polygonSelection'));
         lasso.dom.addEventListener('click', () => events.fire('tool.lassoSelection'));
@@ -266,7 +257,6 @@ class BottomToolbar extends Container {
         tooltips.register(undo, tooltip('tooltip.bottom-toolbar.undo', 'edit.undo'));
         tooltips.register(redo, tooltip('tooltip.bottom-toolbar.redo', 'edit.redo'));
         tooltips.register(filter, () => 'Filter Panel');
-        tooltips.register(plane, () => 'Plane Tool');
         tooltips.register(section, () => 'Section Tool');
         tooltips.register(picker, tooltip('tooltip.bottom-toolbar.rectangle-selection', 'tool.rectSelection'));
         tooltips.register(lasso, tooltip('tooltip.bottom-toolbar.lasso-selection', 'tool.lassoSelection'));

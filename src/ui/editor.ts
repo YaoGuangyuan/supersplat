@@ -13,7 +13,6 @@ import { ImageSettingsDialog } from './image-settings-dialog';
 import { i18n } from './localization';
 import { Menu } from './menu';
 import { ModeToggle } from './mode-toggle';
-import { PlanePanel } from './plane-panel';
 import logo from './playcanvas-logo.png';
 import { Popup, ShowOptions } from './popup';
 import { Progress } from './progress';
@@ -99,7 +98,6 @@ class EditorUI {
         const settingsPanel = new SettingsPanel(events, tooltips);
         const colorPanel = new ColorPanel(events, tooltips);
         const filterPanel = new FilterPanel(events, tooltips);
-        const planePanel = new PlanePanel(events, tooltips);
         const sectionPanel = new SectionPanel(events, tooltips);
         const bottomToolbar = new BottomToolbar(events, tooltips);
         const rightToolbar = new RightToolbar(events, tooltips);
@@ -115,7 +113,6 @@ class EditorUI {
         canvasContainer.append(settingsPanel);
         canvasContainer.append(colorPanel);
         canvasContainer.append(filterPanel);
-        canvasContainer.append(planePanel);
         canvasContainer.append(sectionPanel);
         canvasContainer.append(bottomToolbar);
         canvasContainer.append(rightToolbar);

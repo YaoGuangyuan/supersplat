@@ -650,6 +650,8 @@ class SectionPanel extends Container {
     private viewerSelectionMask: Uint8Array | null = null;
     private sectionSliceMask: Uint8Array | null = null;
     private sectionSliceCount = 0;
+    private sectionSliceSignature = '';
+    private sectionSliceSplat: SplatLike | null = null;
     private topDataSplat: SplatLike | null = null;
     private viewerDataSplat: SplatLike | null = null;
     private viewerSelectionTool: ViewerSelectionTool = 'none';
@@ -859,6 +861,55 @@ class SectionPanel extends Container {
         const sig = this.getSplatStateSignature(splat);
         this.lastViewerDeletedCount = sig.deleted;
         this.lastViewerLockedCount = sig.locked;
+    }
+
+    private getSectionSliceSignature(settings: SectionSettings) {
+        const line = this.sectionLine;
+        if (!line) return '';
+
+        return [
+            settings.topAxes,
+            settings.scope,
+            settings.sideMode || 'both',
+            settings.thickness.toFixed(6),
+            line.a0.toFixed(6),
+            line.b0.toFixed(6),
+            line.a1.toFixed(6),
+            line.b1.toFixed(6)
+        ].join('|');
+    }
+
+    private hasCurrentSectionSliceCache(splat: SplatLike | null, settings: SectionSettings) {
+        return !!(
+            splat &&
+            this.sectionLine &&
+            this.sectionSliceMask &&
+            this.sectionSliceCount > 0 &&
+            this.sectionSliceSplat === splat &&
+            this.sectionSliceSignature === this.getSectionSliceSignature(settings)
+        );
+    }
+
+    private invalidateSectionSliceCache() {
+        this.sectionSliceMask = null;
+        this.sectionSliceCount = 0;
+        this.sectionSliceSignature = '';
+        this.sectionSliceSplat = null;
+
+        if (this.lastPreviewKind === 'sectionLineSlice') {
+            this.lastMask = null;
+            this.lastPreviewCount = 0;
+            this.lastPreviewKind = '';
+        }
+    }
+
+    private markSectionSliceDirty(message: string) {
+        this.invalidateSectionSliceCache();
+        this.setTopStatus(message);
+
+        if (this.viewerData) {
+            this.viewerStatsDom.textContent = message;
+        }
     }
 
     private syncSelectionHighlightsFromGlobalState() {
@@ -1335,7 +1386,7 @@ class SectionPanel extends Container {
         const filterVisible = !!(filterPanel && !filterPanel.classList.contains('pcui-hidden'));
         const sectionVisible = !!(sectionPanel && !sectionPanel.classList.contains('pcui-hidden'));
 
-        ['settings-panel', 'color-panel', 'plane-panel'].forEach((id) => {
+        ['settings-panel', 'color-panel'].forEach((id) => {
             const panel = document.getElementById(id);
             if (panel) {
                 panel.style.right = hostVisible ? `${panelBaseRight}px` : '';
@@ -1778,6 +1829,7 @@ class SectionPanel extends Container {
             this.sectionLine = null;
             this.drawingPoint = 0;
             this.pickingWidth = false;
+            this.invalidateSectionSliceCache();
             this.drawTopView();
             this.setTopStatus('Line cleared. Click two points in TopView.');
         });
@@ -1916,6 +1968,18 @@ class SectionPanel extends Container {
         build.title = 'Build the profile view in a separate floating window.';
         build.addEventListener('click', () => { void this.buildSectionView(true); });
 
+        this.topAxesInput.addEventListener('change', () => {
+            this.markSectionSliceDirty('TopView axes changed. Refresh Top, Build View, or Select Slice to recompute.');
+        });
+        this.thicknessInput.addEventListener('change', () => {
+            this.markSectionSliceDirty('Thickness changed. Build View or Select Slice will use the latest corridor.');
+        });
+        this.sideModeInput.addEventListener('change', () => {
+            this.markSectionSliceDirty('Thickness side changed. Build View or Select Slice will use the latest corridor.');
+        });
+        this.scopeInput.addEventListener('change', () => {
+            this.markSectionSliceDirty('Scope changed. Refresh Top, Build View, or Select Slice to recompute.');
+        });
         this.topVerticalDirectionInput.addEventListener('change', () => {
             if (this.topDrawData) {
                 this.topDrawData.settings = this.getSettings();
@@ -3687,6 +3751,7 @@ class SectionPanel extends Container {
 
             this.thicknessInput.value = String(Number(Math.max(0.000001, thickness).toFixed(6)));
             this.pickingWidth = false;
+            this.invalidateSectionSliceCache();
 
             const sideText = sideMode === 'both'
                 ? `centered total width = ${this.thicknessInput.value}`
@@ -3709,11 +3774,13 @@ class SectionPanel extends Container {
                 b1: p.b
             };
             this.drawingPoint = 1;
+            this.invalidateSectionSliceCache();
             this.setTopStatus('Start point set. Click second point.');
         } else {
             this.sectionLine.a1 = p.a;
             this.sectionLine.b1 = p.b;
             this.drawingPoint = 0;
+            this.invalidateSectionSliceCache();
             this.setTopStatus('Section line set. Click Build View.');
         }
 
@@ -5145,6 +5212,8 @@ class SectionPanel extends Container {
             const section = this.getSectionData(x, y, z, state, fdc0, fdc1, fdc2, candidates, settings);
             this.sectionSliceMask = section.mask;
             this.sectionSliceCount = section.count;
+            this.sectionSliceSignature = this.getSectionSliceSignature(settings);
+            this.sectionSliceSplat = splat;
             this.lastMask = section.mask;
             this.viewerSelectionMask = null;
             this.lastPreviewCount = section.count;
@@ -5174,7 +5243,10 @@ class SectionPanel extends Container {
     }
 
     private async selectSlice() {
-        if (!this.sectionSliceMask) {
+        const splat = this.events.invoke('selection') as SplatLike | null;
+        const settings = this.getSettings();
+
+        if (!this.hasCurrentSectionSliceCache(splat, settings)) {
             await this.buildSectionView(false);
         }
 
@@ -5335,6 +5407,8 @@ class SectionPanel extends Container {
             this.cacheViewerStateSignature(splat);
             this.sectionSliceMask = null;
             this.sectionSliceCount = 0;
+            this.sectionSliceSignature = '';
+            this.sectionSliceSplat = null;
             this.lastMask = null;
             this.viewerSelectionMask = null;
             this.lastPreviewCount = 0;
@@ -5349,6 +5423,8 @@ class SectionPanel extends Container {
 
         this.sectionSliceMask = section.mask;
         this.sectionSliceCount = section.count;
+        this.sectionSliceSignature = this.getSectionSliceSignature(settings);
+        this.sectionSliceSplat = splat;
         this.lastMask = section.mask;
         this.viewerSelectionMask = null;
         this.lastPreviewCount = section.count;

@@ -1,6 +1,15 @@
 import { Container } from '@playcanvas/pcui';
 
 import { Events } from '../events';
+import {
+    DEFAULT_PLANE_SETTINGS,
+    buildPlaneInlierMask,
+    buildPlaneOutsideMask,
+    collectPlaneCandidateIndices,
+    collectSelectedValidIndices,
+    fitRobustPlaneFromIndices,
+    preparePlaneArrays
+} from './plane-utils';
 import { Tooltips } from './tooltips';
 
 type SplatLike = {
@@ -38,6 +47,19 @@ type PointCloudSettings = {
     stdRatio: number;
 };
 
+type SkySettings = {
+    upAxis: 'x' | 'y' | 'z';
+    topPercent: number;
+    minBrightness: number;
+    maxWhiteSaturation: number;
+    minBlueBias: number;
+    maxOpacity: number;
+    minScale: number;
+    protectStructures: boolean;
+    keepTopConnected: boolean;
+    preferDiscreteSky: boolean;
+};
+
 type ObjectSettings = {
     method: 'euclidean' | 'color';
     seedMode: 'single' | 'all';
@@ -46,6 +68,24 @@ type ObjectSettings = {
     fastPreview: boolean;
     maxPoints: number;
     limitToSelection: boolean;
+};
+
+type AdvancedSettings = {
+    tool: 'plane';
+    planeAction: 'select' | 'set' | 'outside';
+    planeFitThreshold: number;
+    outsideDistance: number;
+    filterScope: string;
+    filterSide: string;
+};
+
+type PlaneModel = {
+    nx: number;
+    ny: number;
+    nz: number;
+    d: number;
+    seedCount: number;
+    inlierCount: number;
 };
 
 type FilterResult = {
@@ -70,7 +110,7 @@ type VoxelCell = {
     indices: number[];
 };
 
-type FilterMode = 'outlier' | 'blackArtifact' | 'pointCloud' | 'object';
+type FilterMode = 'outlier' | 'sky' | 'blackArtifact' | 'pointCloud' | 'object' | 'advanced';
 
 type ReasonDisplayInfo = {
     label: string;
@@ -114,6 +154,19 @@ const DEFAULT_POINT_CLOUD_SETTINGS: PointCloudSettings = {
     stdRatio: 3.5
 };
 
+const DEFAULT_SKY_SETTINGS: SkySettings = {
+    upAxis: 'y',
+    topPercent: 15,
+    minBrightness: 0.66,
+    maxWhiteSaturation: 0.20,
+    minBlueBias: 0.08,
+    maxOpacity: 0.32,
+    minScale: 1.00,
+    protectStructures: false,
+    keepTopConnected: false,
+    preferDiscreteSky: false
+};
+
 const DEFAULT_OBJECT_SETTINGS: ObjectSettings = {
     method: 'euclidean',
     seedMode: 'single',
@@ -124,11 +177,28 @@ const DEFAULT_OBJECT_SETTINGS: ObjectSettings = {
     limitToSelection: false
 };
 
+const DEFAULT_ADVANCED_SETTINGS: AdvancedSettings = {
+    tool: 'plane',
+    planeAction: 'select',
+    planeFitThreshold: DEFAULT_PLANE_SETTINGS.planeFitThreshold,
+    outsideDistance: DEFAULT_PLANE_SETTINGS.outsideDistance,
+    filterScope: DEFAULT_PLANE_SETTINGS.filterScope,
+    filterSide: DEFAULT_PLANE_SETTINGS.filterSide
+};
+
 const REASON_DISPLAY: Record<FilterMode, Record<string, ReasonDisplayInfo>> = {
     outlier: {
         opacity: { label: 'Low opacity', className: 'reason-opacity', order: 1 },
         scale: { label: 'Large scale', className: 'reason-scale', order: 2 },
         radius: { label: 'Sparse', className: 'reason-radius', order: 3 },
+        clippedOutsideSelection: { label: 'Clipped', className: 'reason-clipped', order: 99 }
+    },
+    sky: {
+        topBand: { label: 'Top band', className: 'reason-cluster', order: 1 },
+        skyWhite: { label: 'White sky', className: 'reason-statistical', order: 2 },
+        skyBlue: { label: 'Blue sky', className: 'reason-statistical', order: 3 },
+        skyHaze: { label: 'Sky haze', className: 'reason-opacity', order: 4 },
+        discreteSky: { label: 'Discrete sky', className: 'reason-clipped', order: 5 },
         clippedOutsideSelection: { label: 'Clipped', className: 'reason-clipped', order: 99 }
     },
     blackArtifact: {
@@ -147,6 +217,11 @@ const REASON_DISPLAY: Record<FilterMode, Record<string, ReasonDisplayInfo>> = {
         object: { label: 'Object', className: 'reason-cluster', order: 1 },
         colorObject: { label: 'Color object', className: 'reason-statistical', order: 2 },
         truncated: { label: 'Fast preview', className: 'reason-clipped', order: 98 },
+        clippedOutsideSelection: { label: 'Clipped', className: 'reason-clipped', order: 99 }
+    },
+    advanced: {
+        planeInlier: { label: 'Plane', className: 'reason-cluster', order: 1 },
+        planeOutside: { label: 'Outside plane', className: 'reason-statistical', order: 2 },
         clippedOutsideSelection: { label: 'Clipped', className: 'reason-clipped', order: 99 }
     }
 };
@@ -431,6 +506,14 @@ const decodeColorChannel = (value: number) => {
 
 const computeBrightness = (r: number, g: number, b: number) => {
     return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+
+const computeSaturation = (r: number, g: number, b: number) => {
+    const maxValue = Math.max(r, g, b);
+    if (maxValue <= 1e-6) return 0;
+
+    const minValue = Math.min(r, g, b);
+    return (maxValue - minValue) / maxValue;
 };
 
 const estimateAverageSpacing = (
@@ -1344,6 +1427,306 @@ const computeOutlierMask = async (
     return { mask, total: n, count, reasonCounts, reasonMasks };
 };
 
+const computeSkyMask = async (
+    events: Events,
+    splat: SplatLike,
+    settings: SkySettings,
+    limitToSelection = false,
+    scopeIndices: number[] | null = null
+): Promise<FilterResult> => {
+    const { n, x, y, z, state, opacity, scale0, scale1, scale2, fdc0, fdc1, fdc2 } = prepareArrays(splat);
+
+    if (!fdc0 || !fdc1 || !fdc2) {
+        throw new Error('Selected splat does not have f_dc_0 / f_dc_1 / f_dc_2 color properties.');
+    }
+
+    const candidates = getProcessingIndices(n, state, limitToSelection, scopeIndices);
+    if (candidates.length === 0) {
+        throw new Error('No candidate sky points. Select a region first or disable Limit to current selection.');
+    }
+
+    const axis = settings.upAxis === 'x' ? x : settings.upAxis === 'z' ? z : y;
+    const horizontalA = settings.upAxis === 'x' ? y : x;
+    const horizontalB = settings.upAxis === 'z' ? y : z;
+    let minAxis = Infinity;
+    let maxAxis = -Infinity;
+    const averageSpacing = estimateAverageSpacing(candidates, x, y, z);
+    const structureCellSize = Math.max(averageSpacing * 3.5, 1e-4);
+    const invStructureCellSize = 1 / structureCellSize;
+    const structureDepthThreshold = Math.max(averageSpacing * 8, 1e-3);
+    const structureColumnMinPoints = 6;
+    const columnStats = new Map<string, { count: number; minUp: number; maxUp: number }>();
+
+    for (let ci = 0; ci < candidates.length; ci++) {
+        const i = candidates[ci];
+        const value = axis[i];
+        if (value < minAxis) minAxis = value;
+        if (value > maxAxis) maxAxis = value;
+
+        if (settings.protectStructures) {
+            const key = `${Math.floor(horizontalA[i] * invStructureCellSize)},${Math.floor(horizontalB[i] * invStructureCellSize)}`;
+            const column = columnStats.get(key);
+            if (column) {
+                column.count++;
+                if (value < column.minUp) column.minUp = value;
+                if (value > column.maxUp) column.maxUp = value;
+            } else {
+                columnStats.set(key, { count: 1, minUp: value, maxUp: value });
+            }
+        }
+    }
+
+    const histogramBins = 256;
+    const histogram = new Uint32Array(histogramBins);
+    const axisRange = Math.max(1e-6, maxAxis - minAxis);
+    const histogramScale = (histogramBins - 1) / axisRange;
+    const topFraction = Math.max(0.01, Math.min(0.80, settings.topPercent / 100));
+    const targetTopCount = Math.max(1, Math.round(candidates.length * topFraction));
+    const step = Math.max(1, Math.floor(candidates.length / 100));
+
+    for (let ci = 0; ci < candidates.length; ci++) {
+        const value = axis[candidates[ci]];
+        const bin = Math.max(0, Math.min(histogramBins - 1, Math.floor((value - minAxis) * histogramScale)));
+        histogram[bin]++;
+
+        if (ci % step === 0) {
+            updateProgress(events, `Building sky height histogram ${ci.toLocaleString()} / ${candidates.length.toLocaleString()}`, (ci / Math.max(1, candidates.length)) * 0.20);
+            if (ci % (step * 5) === 0) await yieldToBrowser();
+        }
+    }
+
+    let accumulatedTopCount = 0;
+    let thresholdBin = histogramBins - 1;
+    for (let bi = histogramBins - 1; bi >= 0; bi--) {
+        accumulatedTopCount += histogram[bi];
+        if (accumulatedTopCount >= targetTopCount) {
+            thresholdBin = bi;
+            break;
+        }
+    }
+
+    const topThreshold = minAxis + (thresholdBin / Math.max(1, histogramBins - 1)) * axisRange;
+    const blueBrightnessThreshold = Math.max(0.35, settings.minBrightness * 0.8);
+    const hazeBrightnessThreshold = Math.max(0.35, settings.minBrightness * 0.72);
+    const useOpacity = !!opacity && settings.maxOpacity < 0.999;
+    const useScale = !!scale0 && !!scale1 && !!scale2 && settings.minScale > 0;
+    const topSeedThreshold = topThreshold + (maxAxis - topThreshold) * 0.55;
+    const whiteSkyThreshold = topThreshold + (maxAxis - topThreshold) * 0.35;
+    const localVoxelSize = Math.max(averageSpacing * 2.5, 1e-4);
+    const localInv = 1 / localVoxelSize;
+    const localCells = buildVoxelCells(n, x, y, z, state, localVoxelSize, limitToSelection, candidates);
+    const mask = new Uint8Array(n);
+    const reasonMasks: Record<string, Uint8Array> = {
+        topBand: new Uint8Array(n),
+        skyWhite: new Uint8Array(n),
+        skyBlue: new Uint8Array(n),
+        skyHaze: new Uint8Array(n),
+        discreteSky: new Uint8Array(n)
+    };
+    const reasonCounts: Record<string, number> = {
+        topBand: 0,
+        skyWhite: 0,
+        skyBlue: 0,
+        skyHaze: 0,
+        discreteSky: 0
+    };
+
+    for (let ci = 0; ci < candidates.length; ci++) {
+        const i = candidates[ci];
+        const heightHit = axis[i] >= topThreshold;
+        if (!heightHit) {
+            if (ci % step === 0) {
+                updateProgress(events, `Scoring sky points ${ci.toLocaleString()} / ${candidates.length.toLocaleString()}`, 0.20 + (ci / Math.max(1, candidates.length)) * 0.80);
+                if (ci % (step * 5) === 0) await yieldToBrowser();
+            }
+            continue;
+        }
+
+        const r = decodeColorChannel(fdc0[i]);
+        const g = decodeColorChannel(fdc1[i]);
+        const b = decodeColorChannel(fdc2[i]);
+        const brightness = computeBrightness(r, g, b);
+        const saturation = computeSaturation(r, g, b);
+        const blueBias = b - Math.max(r, g);
+        const whiteHit = brightness >= settings.minBrightness && saturation <= settings.maxWhiteSaturation;
+        const blueHit = brightness >= blueBrightnessThreshold && blueBias >= settings.minBlueBias;
+
+        let hazeHit = false;
+        if (brightness >= hazeBrightnessThreshold) {
+            const opacityHit = useOpacity && opacity ? sigmoid(opacity[i]) <= settings.maxOpacity : false;
+            const scaleHit = useScale && scale0 && scale1 && scale2
+                ? Math.max(Math.exp(scale0[i]), Math.exp(scale1[i]), Math.exp(scale2[i])) >= settings.minScale
+                : false;
+            hazeHit = opacityHit || scaleHit;
+        }
+
+        const ix = Math.floor(x[i] * localInv);
+        const iy = Math.floor(y[i] * localInv);
+        const iz = Math.floor(z[i] * localInv);
+        const currentKey = cellKey(ix, iy, iz);
+        const currentCell = localCells.get(currentKey);
+        let neighborhoodCount = 0;
+        let occupiedCells = 0;
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dz = -1; dz <= 1; dz++) {
+                    const key = cellKey(ix + dx, iy + dy, iz + dz);
+                    const cell = localCells.get(key);
+                    if (!cell) continue;
+                    occupiedCells++;
+                    neighborhoodCount += cell.count;
+                }
+            }
+        }
+
+        const localMeanCellCount = occupiedCells > 0 ? neighborhoodCount / occupiedCells : 0;
+        const localSupportRatio = currentCell && localMeanCellCount > 0 ? currentCell.count / localMeanCellCount : 0;
+        const discreteSkyHint = neighborhoodCount <= 6 || occupiedCells <= 3 || localSupportRatio < 0.55;
+        const nearTopSky = axis[i] >= whiteSkyThreshold;
+
+        let protectedStructure = false;
+        if (settings.protectStructures) {
+            const key = `${Math.floor(horizontalA[i] * invStructureCellSize)},${Math.floor(horizontalB[i] * invStructureCellSize)}`;
+            const column = columnStats.get(key);
+            if (column) {
+                const nearColumnTop = (column.maxUp - axis[i]) <= structureCellSize;
+                const columnDepth = column.maxUp - column.minUp;
+                protectedStructure = nearColumnTop &&
+                    column.count >= structureColumnMinPoints &&
+                    columnDepth >= structureDepthThreshold;
+            }
+        }
+
+        const whiteSkyAllowed = !whiteHit || blueHit || hazeHit || (discreteSkyHint && nearTopSky);
+        const whiteSurfaceRejected = whiteHit && !whiteSkyAllowed;
+        const allowDiscrete = !settings.preferDiscreteSky || discreteSkyHint || blueHit;
+
+        if ((whiteHit || blueHit || hazeHit) && !protectedStructure && !whiteSurfaceRejected && allowDiscrete) {
+            mask[i] = 255;
+            reasonMasks.topBand[i] = 255;
+            reasonCounts.topBand++;
+
+            if (whiteHit) {
+                reasonMasks.skyWhite[i] = 255;
+                reasonCounts.skyWhite++;
+            }
+
+            if (blueHit) {
+                reasonMasks.skyBlue[i] = 255;
+                reasonCounts.skyBlue++;
+            }
+
+            if (hazeHit) {
+                reasonMasks.skyHaze[i] = 255;
+                reasonCounts.skyHaze++;
+            }
+
+            if (discreteSkyHint) {
+                reasonMasks.discreteSky[i] = 255;
+                reasonCounts.discreteSky++;
+            }
+        }
+
+        if (ci % step === 0) {
+            updateProgress(events, `Scoring sky points ${ci.toLocaleString()} / ${candidates.length.toLocaleString()}`, 0.20 + (ci / Math.max(1, candidates.length)) * 0.80);
+            if (ci % (step * 5) === 0) await yieldToBrowser();
+        }
+    }
+
+    if (settings.keepTopConnected) {
+        const connectedCellSize = Math.max(averageSpacing * 5, 1e-4);
+        const invConnectedCellSize = 1 / connectedCellSize;
+        const connectedCells = new Map<string, { a: number; b: number; maxUp: number; indices: number[] }>();
+
+        for (let ci = 0; ci < candidates.length; ci++) {
+            const i = candidates[ci];
+            if (!mask[i]) continue;
+
+            const a = Math.floor(horizontalA[i] * invConnectedCellSize);
+            const b = Math.floor(horizontalB[i] * invConnectedCellSize);
+            const key = `${a},${b}`;
+            const existing = connectedCells.get(key);
+
+            if (existing) {
+                existing.indices.push(i);
+                if (axis[i] > existing.maxUp) existing.maxUp = axis[i];
+            } else {
+                connectedCells.set(key, {
+                    a,
+                    b,
+                    maxUp: axis[i],
+                    indices: [i]
+                });
+            }
+        }
+
+        const keepCells = new Set<string>();
+        const queue: string[] = [];
+
+        connectedCells.forEach((cell, key) => {
+            if (cell.maxUp >= topSeedThreshold) {
+                keepCells.add(key);
+                queue.push(key);
+            }
+        });
+
+        for (let qi = 0; qi < queue.length; qi++) {
+            const currentKey = queue[qi];
+            const current = connectedCells.get(currentKey);
+            if (!current) continue;
+
+            for (let da = -1; da <= 1; da++) {
+                for (let db = -1; db <= 1; db++) {
+                    if (da === 0 && db === 0) continue;
+
+                    const neighborKey = `${current.a + da},${current.b + db}`;
+                    if (!connectedCells.has(neighborKey) || keepCells.has(neighborKey)) continue;
+
+                    keepCells.add(neighborKey);
+                    queue.push(neighborKey);
+                }
+            }
+        }
+
+        for (let ci = 0; ci < candidates.length; ci++) {
+            const i = candidates[ci];
+            if (!mask[i]) continue;
+
+            const key = `${Math.floor(horizontalA[i] * invConnectedCellSize)},${Math.floor(horizontalB[i] * invConnectedCellSize)}`;
+            if (!keepCells.has(key)) {
+                mask[i] = 0;
+                reasonMasks.topBand[i] = 0;
+                reasonMasks.skyWhite[i] = 0;
+                reasonMasks.skyBlue[i] = 0;
+                reasonMasks.skyHaze[i] = 0;
+                reasonMasks.discreteSky[i] = 0;
+            }
+        }
+
+        reasonCounts.topBand = 0;
+        reasonCounts.skyWhite = 0;
+        reasonCounts.skyBlue = 0;
+        reasonCounts.skyHaze = 0;
+        reasonCounts.discreteSky = 0;
+
+        for (let ci = 0; ci < candidates.length; ci++) {
+            const i = candidates[ci];
+            if (reasonMasks.topBand[i]) reasonCounts.topBand++;
+            if (reasonMasks.skyWhite[i]) reasonCounts.skyWhite++;
+            if (reasonMasks.skyBlue[i]) reasonCounts.skyBlue++;
+            if (reasonMasks.skyHaze[i]) reasonCounts.skyHaze++;
+            if (reasonMasks.discreteSky[i]) reasonCounts.discreteSky++;
+        }
+    }
+
+    let count = 0;
+    for (let ci = 0; ci < candidates.length; ci++) {
+        if (mask[candidates[ci]]) count++;
+    }
+
+    return { mask, total: n, count, reasonCounts, reasonMasks };
+};
+
 
 const computeBlackArtifactMask = async (
     events: Events,
@@ -1980,6 +2363,101 @@ const computeObjectMask = async (
     };
 };
 
+const computeAdvancedPlaneMask = async (
+    events: Events,
+    splat: SplatLike,
+    settings: AdvancedSettings,
+    savedPlane: PlaneModel | null
+): Promise<{
+    result: FilterResult;
+    nextSavedPlane: PlaneModel | null;
+    previewNote: string;
+}> => {
+    const { n, x, y, z, state } = preparePlaneArrays(splat);
+
+    if (settings.planeAction === 'outside') {
+        if (!savedPlane) {
+            throw new Error('No saved plane. Run Set + Select first, then Preview Outside.');
+        }
+
+        const candidates = collectPlaneCandidateIndices(n, state, settings.filterScope);
+        if (candidates.length === 0) {
+            throw new Error('No candidate points. Select a region first or switch Filter scope to Whole splat.');
+        }
+
+        const { mask, count } = await buildPlaneOutsideMask(
+            events,
+            n,
+            x,
+            y,
+            z,
+            state,
+            candidates,
+            savedPlane,
+            settings.outsideDistance,
+            settings.filterSide,
+            0,
+            1,
+            'Plane outside'
+        );
+
+        return {
+            result: {
+                mask,
+                total: n,
+                count,
+                reasonCounts: { planeOutside: count },
+                reasonMasks: { planeOutside: mask.slice() }
+            },
+            nextSavedPlane: savedPlane,
+            previewNote: `outside distance: ${settings.outsideDistance} | side: ${settings.filterSide} | scope: ${settings.filterScope}`
+        };
+    }
+
+    const selected = collectSelectedValidIndices(n, state);
+    if (selected.length < 3) {
+        throw new Error('Please roughly select an area containing the target plane first.');
+    }
+
+    const plane = await fitRobustPlaneFromIndices(
+        events,
+        x,
+        y,
+        z,
+        selected,
+        settings.planeFitThreshold
+    );
+
+    const { mask, count } = await buildPlaneInlierMask(
+        events,
+        n,
+        x,
+        y,
+        z,
+        state,
+        selected,
+        plane,
+        settings.planeFitThreshold,
+        0.75,
+        0.25,
+        'Selecting plane inliers'
+    );
+
+    return {
+        result: {
+            mask,
+            total: n,
+            count,
+            reasonCounts: { planeInlier: count },
+            reasonMasks: { planeInlier: mask.slice() }
+        },
+        nextSavedPlane: settings.planeAction === 'set' ? plane : savedPlane,
+        previewNote:
+            `inliers: ${plane.inlierCount.toLocaleString()} / ${selected.length.toLocaleString()} | ` +
+            `normal: ${plane.nx.toFixed(3)}, ${plane.ny.toFixed(3)}, ${plane.nz.toFixed(3)}`,
+    };
+};
+
 
 class FilterPanel extends Container {
     private events: Events;
@@ -1989,9 +2467,11 @@ class FilterPanel extends Container {
     private reasonButtonsRow: HTMLDivElement;
     private titleDom: HTMLSpanElement;
     private outlierTab: HTMLSpanElement;
+    private skyTab: HTMLSpanElement;
     private blackTab: HTMLSpanElement;
     private pointTab: HTMLSpanElement;
     private objectTab: HTMLSpanElement;
+    private advancedTab: HTMLSpanElement;
     private lastPreviewCount = 0;
     private lastPreviewKind = '';
     private lastPreviewBaseKind = '';
@@ -2000,6 +2480,7 @@ class FilterPanel extends Container {
     private lastPreviewReasonMasks: Record<string, Uint8Array> = {};
     private limitToSelectionInput!: HTMLInputElement;
     private objectPickButton: HTMLSpanElement | null = null;
+    private previewButton: HTMLSpanElement;
     private objectPickingActive = false;
     private objectPickPointerId: number | null = null;
     private objectPickStartX = 0;
@@ -2019,6 +2500,19 @@ class FilterPanel extends Container {
         minScale: HTMLInputElement;
         radius: HTMLInputElement;
         minNeighbors: HTMLInputElement;
+    };
+
+    private skyInputs!: {
+        upAxis: HTMLSelectElement;
+        topPercent: HTMLInputElement;
+        minBrightness: HTMLInputElement;
+        maxWhiteSaturation: HTMLInputElement;
+        minBlueBias: HTMLInputElement;
+        maxOpacity: HTMLInputElement;
+        minScale: HTMLInputElement;
+        protectStructures: HTMLInputElement;
+        keepTopConnected: HTMLInputElement;
+        preferDiscreteSky: HTMLInputElement;
     };
 
     private pointInputs!: {
@@ -2043,6 +2537,17 @@ class FilterPanel extends Container {
         fastPreview: HTMLInputElement;
         maxPoints: HTMLInputElement;
     };
+
+    private advancedInputs!: {
+        tool: HTMLSelectElement;
+        planeAction: HTMLSelectElement;
+        planeFitThreshold: HTMLInputElement;
+        outsideDistance: HTMLInputElement;
+        filterScope: HTMLSelectElement;
+        filterSide: HTMLSelectElement;
+    };
+
+    private savedPlane: PlaneModel | null = null;
 
     constructor(events: Events, _tooltips?: Tooltips, args = {}) {
         args = {
@@ -2091,6 +2596,10 @@ class FilterPanel extends Container {
         this.outlierTab.className = 'filter-panel-tab active';
         this.outlierTab.textContent = 'Outlier';
 
+        this.skyTab = document.createElement('span');
+        this.skyTab.className = 'filter-panel-tab';
+        this.skyTab.textContent = 'Sky';
+
         this.blackTab = document.createElement('span');
         this.blackTab.className = 'filter-panel-tab';
         this.blackTab.textContent = 'Black';
@@ -2103,15 +2612,23 @@ class FilterPanel extends Container {
         this.objectTab.className = 'filter-panel-tab';
         this.objectTab.textContent = 'Object';
 
+        this.advancedTab = document.createElement('span');
+        this.advancedTab.className = 'filter-panel-tab';
+        this.advancedTab.textContent = 'Advanced';
+
         this.outlierTab.addEventListener('click', () => this.setMode('outlier'));
+        this.skyTab.addEventListener('click', () => this.setMode('sky'));
         this.blackTab.addEventListener('click', () => this.setMode('blackArtifact'));
         this.pointTab.addEventListener('click', () => this.setMode('pointCloud'));
         this.objectTab.addEventListener('click', () => this.setMode('object'));
+        this.advancedTab.addEventListener('click', () => this.setMode('advanced'));
 
         tabs.appendChild(this.outlierTab);
+        tabs.appendChild(this.skyTab);
         tabs.appendChild(this.blackTab);
         tabs.appendChild(this.pointTab);
         tabs.appendChild(this.objectTab);
+        tabs.appendChild(this.advancedTab);
 
         this.rowsDom = document.createElement('div');
         this.rowsDom.className = 'filter-panel-rows';
@@ -2136,12 +2653,12 @@ class FilterPanel extends Container {
         const deleteButton = this.makeButton('Delete', 'danger');
         deleteButton.addEventListener('click', () => { void this.deletePreviewed(); });
 
-        const previewButton = this.makeButton('Preview', 'primary');
-        previewButton.addEventListener('click', () => { void this.preview(); });
+        this.previewButton = this.makeButton('Preview', 'primary');
+        this.previewButton.addEventListener('click', () => { void this.preview(); });
 
         controlRow.appendChild(clearButton);
         controlRow.appendChild(deleteButton);
-        controlRow.appendChild(previewButton);
+        controlRow.appendChild(this.previewButton);
 
         this.dom.appendChild(header);
         this.dom.appendChild(tabs);
@@ -2183,6 +2700,26 @@ class FilterPanel extends Container {
         events.on('filter.hide', () => {
             this.setObjectPickingActive(false);
             this.hidden = true;
+        });
+
+        events.on('plane.toggle', () => {
+            this.hidden = !this.hidden;
+            if (!this.hidden) {
+                this.setMode('advanced');
+            } else {
+                this.setObjectPickingActive(false);
+            }
+        });
+
+        events.on('plane.show', () => {
+            this.hidden = false;
+            this.setMode('advanced');
+        });
+
+        events.on('plane.hide', () => {
+            if (this.mode === 'advanced') {
+                this.hidden = true;
+            }
         });
 
         this.setMode('outlier');
@@ -2485,6 +3022,23 @@ class FilterPanel extends Container {
         return value;
     }
 
+    private updatePreviewButtonLabel() {
+        if (!this.previewButton) return;
+
+        if (this.mode !== 'advanced') {
+            this.previewButton.textContent = 'Preview';
+            return;
+        }
+
+        const action = this.advancedInputs?.planeAction?.value ?? DEFAULT_ADVANCED_SETTINGS.planeAction;
+        this.previewButton.textContent =
+            action === 'set'
+                ? 'Set + Select'
+                : action === 'outside'
+                    ? 'Preview Outside'
+                    : 'Select Plane';
+    }
+
     private getReasonDisplayInfo(reasonKey: string): ReasonDisplayInfo {
         const modeInfo = REASON_DISPLAY[this.lastPreviewBaseKind as FilterMode] ?? {};
         if (reasonKey.startsWith('segment:')) {
@@ -2632,6 +3186,47 @@ class FilterPanel extends Container {
         saveJson('supersplat.blackArtifactFilter.settings', this.getBlackSettings());
     }
 
+    private applySkyPreset(kind: 'balanced' | 'blue' | 'haze') {
+        if (!this.skyInputs) return;
+
+        if (kind === 'blue') {
+            this.skyInputs.topPercent.value = '16';
+            this.skyInputs.minBrightness.value = '0.50';
+            this.skyInputs.maxWhiteSaturation.value = '0.40';
+            this.skyInputs.minBlueBias.value = '0.09';
+            this.skyInputs.maxOpacity.value = '0.55';
+            this.skyInputs.minScale.value = '0.40';
+            this.skyInputs.protectStructures.checked = false;
+            this.skyInputs.keepTopConnected.checked = false;
+            this.skyInputs.preferDiscreteSky.checked = false;
+            this.statsDom.textContent = 'Sky preset: Blue. Better for clean blue sky and horizon spill.';
+        } else if (kind === 'haze') {
+            this.skyInputs.topPercent.value = '24';
+            this.skyInputs.minBrightness.value = '0.62';
+            this.skyInputs.maxWhiteSaturation.value = '0.28';
+            this.skyInputs.minBlueBias.value = '0.02';
+            this.skyInputs.maxOpacity.value = '0.32';
+            this.skyInputs.minScale.value = '0.95';
+            this.skyInputs.protectStructures.checked = false;
+            this.skyInputs.keepTopConnected.checked = false;
+            this.skyInputs.preferDiscreteSky.checked = false;
+            this.statsDom.textContent = 'Sky preset: Haze. Better for bright white fog, mist, and blown-out sky splats.';
+        } else {
+            this.skyInputs.topPercent.value = '15';
+            this.skyInputs.minBrightness.value = '0.66';
+            this.skyInputs.maxWhiteSaturation.value = '0.20';
+            this.skyInputs.minBlueBias.value = '0.08';
+            this.skyInputs.maxOpacity.value = '0.32';
+            this.skyInputs.minScale.value = '1.00';
+            this.skyInputs.protectStructures.checked = false;
+            this.skyInputs.keepTopConnected.checked = false;
+            this.skyInputs.preferDiscreteSky.checked = false;
+            this.statsDom.textContent = 'Sky preset: Balanced. More biased toward real sky and less willing to keep plain white surfaces like road markings, walls, or bright ground.';
+        }
+
+        saveJson('supersplat.skyFilter.settings', this.getSkySettings());
+    }
+
     private applyPointPreset(kind: 'outdoor' | 'structure' | 'cleanup') {
         if (!this.pointInputs) return;
 
@@ -2686,14 +3281,16 @@ class FilterPanel extends Container {
         this.rowsDom.innerHTML = '';
         this.clearReasonPreview();
         this.objectPickButton = null;
-        if (mode !== 'object') {
+        if (mode !== 'object' && mode !== 'advanced') {
             this.makeScopeRow();
         }
 
         this.outlierTab.classList.remove('active');
+        this.skyTab.classList.remove('active');
         this.blackTab.classList.remove('active');
         this.pointTab.classList.remove('active');
         this.objectTab.classList.remove('active');
+        this.advancedTab.classList.remove('active');
 
         if (mode === 'outlier') {
             this.outlierTab.classList.add('active');
@@ -2730,6 +3327,45 @@ class FilterPanel extends Container {
             };
 
             this.statsDom.textContent = 'Outlier start: Outdoor for general cleanup, Sky for bright sky haze. For sky work, select the sky first and enable Limit to current selection.';
+        } else if (mode === 'sky') {
+            this.skyTab.classList.add('active');
+            this.titleDom.textContent = 'FILTERS / SKY';
+            this.makePresetRow([
+                {
+                    label: 'Balanced',
+                    title: 'Mixed white haze and blue sky.',
+                    apply: () => this.applySkyPreset('balanced')
+                },
+                {
+                    label: 'Blue',
+                    title: 'Cleaner blue sky and horizon spill.',
+                    apply: () => this.applySkyPreset('blue')
+                },
+                {
+                    label: 'Haze',
+                    title: 'Bright white fog, mist, and overexposed sky splats.',
+                    apply: () => this.applySkyPreset('haze')
+                }
+            ]);
+
+            const settings = loadJson<SkySettings>('supersplat.skyFilter.settings', DEFAULT_SKY_SETTINGS);
+            this.skyInputs = {
+                upAxis: this.makeSelectRow('Up axis', settings.upAxis, [
+                    { value: 'y', text: 'Y up' },
+                    { value: 'z', text: 'Z up' },
+                    { value: 'x', text: 'X up' }
+                ], 'Pick the axis that points upward in your scene.'),
+                topPercent: this.makeInputRow('Top region %', String(settings.topPercent), 'Only inspect the highest part of the scene. Try 12 ~ 28.'),
+                minBrightness: this.makeInputRow('Min brightness', String(settings.minBrightness), 'Higher is safer. Lower catches dim sky spill.'),
+                maxWhiteSaturation: this.makeInputRow('White saturation', String(settings.maxWhiteSaturation), 'Lower keeps only whiter sky/fog. Higher accepts more colored clouds.'),
+                minBlueBias: this.makeInputRow('Blue bias', String(settings.minBlueBias), 'How much bluer than red/green a point should be to count as blue sky.'),
+                maxOpacity: this.makeInputRow('Max opacity', String(settings.maxOpacity), 'Optional haze clue. Lower focuses on translucent sky fog. Use 1 to disable.'),
+                minScale: this.makeInputRow('Min scale', String(settings.minScale), 'Optional haze clue. Larger splats often catch blown-out sky fog. Use 0 to disable.'),
+                protectStructures: this.makeCheckboxRow('Protect structures', settings.protectStructures, 'Avoid points that look like dense vertical columns or solid roofs/walls even if their color resembles sky.'),
+                keepTopConnected: this.makeCheckboxRow('Keep top connected', settings.keepTopConnected, 'Only keep sky hits that remain connected to the top sky band. Useful when bright roofs or walls still get picked.'),
+                preferDiscreteSky: this.makeCheckboxRow('Prefer discrete sky', settings.preferDiscreteSky, '3DGS sky often trains as sparse, weakly supported splats. Turn this on to favor those discrete sky hits over solid surfaces.')
+            };
+            this.statsDom.textContent = 'Sky filter: start from color + top region. Turn on Prefer discrete sky when roofs or walls still look too sky-like in 3DGS captures.';
         } else if (mode === 'blackArtifact') {
             this.blackTab.classList.add('active');
             this.titleDom.textContent = 'FILTERS / BLACK';
@@ -2761,75 +3397,159 @@ class FilterPanel extends Container {
             };
 
             this.statsDom.textContent = 'Black dots: bright 0.04, opacity 0.20. Fog: bright 0.05, opacity 1, scale 1.';
+        } else if (mode === 'object') {
+            this.objectTab.classList.add('active');
+            this.titleDom.textContent = 'FILTERS / OBJECT';
+
+            const settings = loadJson<ObjectSettings>('supersplat.objectFilter.settings', DEFAULT_OBJECT_SETTINGS);
+            const pickRow = document.createElement('div');
+            pickRow.className = 'filter-panel-row filter-panel-preset-row';
+            pickRow.title = 'Enable interactive picking, then click the main viewport to grow an object from the clicked seed.';
+
+            const pickLabel = document.createElement('span');
+            pickLabel.className = 'filter-panel-row-label';
+            pickLabel.textContent = 'Viewport';
+
+            const pickButtons = document.createElement('div');
+            pickButtons.className = 'filter-panel-preset-buttons';
+
+            this.objectPickButton = this.makeButton('Picking On', 'primary');
+            this.objectPickButton.addEventListener('click', () => {
+                if (this.objectInputs?.limitToSelection?.checked) {
+                    this.statsDom.textContent = 'Object mode: Scope to selection is on. Click Preview to grow objects directly from the current selection.';
+                    this.setObjectPickingActive(false);
+                    return;
+                }
+                this.setObjectPickingActive(!this.objectPickingActive);
+                if (this.mode === 'object' && this.objectPickingActive) {
+                    this.statsDom.textContent = 'Object mode: click the main viewport to preview a whole object from the clicked seed.';
+                }
+            });
+
+            pickButtons.appendChild(this.objectPickButton);
+            pickRow.appendChild(pickLabel);
+            pickRow.appendChild(pickButtons);
+            this.rowsDom.appendChild(pickRow);
+
+            this.objectInputs = {
+                method: this.makeSelectRow('Method', settings.method, [
+                    { value: 'euclidean', text: 'Euclidean' },
+                    { value: 'color', text: 'Color + distance' }
+                ], 'Euclidean grows by 3D connectivity only. Color + distance also checks color similarity while growing.'),
+                seedMode: this.makeSelectRow('Seed mode', settings.seedMode, [
+                    { value: 'single', text: 'Single object' },
+                    { value: 'all', text: 'All selected seeds' }
+                ], 'Single object uses the first selected seed only. All selected seeds expands every selected seed cluster.'),
+                radius: this.makeInputRow('Radius', String(settings.radius), '3D connectivity radius for object growth.'),
+                colorThreshold: this.makeInputRow('Color threshold', String(settings.colorThreshold), 'Only used by Color + distance. Lower is stricter.'),
+                limitToSelection: this.makeCheckboxRow('Scope to selection', settings.limitToSelection, 'Only grow objects inside the points currently selected before you start object picking. Useful for a sky region or local work area.'),
+                fastPreview: this.makeCheckboxRow('Fast preview', settings.fastPreview, 'Recommended ON. Caps growth earlier and yields more often so object picking stays responsive.'),
+                maxPoints: this.makeInputRow('Max points', String(settings.maxPoints), 'Upper bound for a single object preview. Lower is faster and safer on huge scenes.')
+            };
+
+            this.objectInputs.limitToSelection.addEventListener('change', () => {
+                const scopeMode = this.objectInputs.limitToSelection.checked;
+                if (scopeMode) {
+                    this.setObjectPickingActive(false);
+                    this.statsDom.textContent = 'Object mode: Scope to selection is on. Click Preview to expand the currently selected point cloud directly, no seed pick needed.';
+                } else {
+                    this.setObjectPickingActive(true);
+                    this.statsDom.textContent = 'Object mode: click the main viewport to preview a whole object from the clicked seed.';
+                }
+            });
+
+            this.setObjectPickingActive(!settings.limitToSelection);
+            this.statsDom.textContent = settings.limitToSelection
+                ? 'Object mode: Scope to selection is on. Click Preview to expand the currently selected point cloud directly, no seed pick needed.'
+                : 'Object mode: click the main viewport to preview a whole object from the clicked seed. Turn on Scope to selection to limit growth to a preselected region.';
+        } else if (mode === 'advanced') {
+            this.advancedTab.classList.add('active');
+            this.titleDom.textContent = 'FILTERS / ADVANCED';
+
+            const legacyPlaneSettings = loadJson('supersplat.planeTool.settings', DEFAULT_PLANE_SETTINGS);
+            const settings = loadJson<AdvancedSettings>('supersplat.advancedFilter.settings', {
+                ...DEFAULT_ADVANCED_SETTINGS,
+                planeFitThreshold: legacyPlaneSettings.planeFitThreshold,
+                outsideDistance: legacyPlaneSettings.outsideDistance,
+                filterScope: legacyPlaneSettings.filterScope,
+                filterSide: legacyPlaneSettings.filterSide
+            });
+
+            this.advancedInputs = {
+                tool: this.makeSelectRow('Tool', settings.tool, [
+                    { value: 'plane', text: 'Plane' }
+                ], 'Advanced tools that are useful in specific cleanup workflows.'),
+                planeAction: this.makeSelectRow('Plane action', settings.planeAction, [
+                    { value: 'select', text: 'Select Plane' },
+                    { value: 'set', text: 'Set + Select' },
+                    { value: 'outside', text: 'Preview Outside' }
+                ], 'Select Plane fits the dominant plane inside the current selection. Set + Select also saves it. Preview Outside uses the saved plane.'),
+                planeFitThreshold: this.makeInputRow('Plane threshold', String(settings.planeFitThreshold), 'Distance for detecting or selecting plane inliers. Try 0.05 ~ 0.12.'),
+                outsideDistance: this.makeInputRow('Outside distance', String(settings.outsideDistance), 'Distance for selecting points outside the saved plane. Try 0.10 ~ 0.30.'),
+                filterScope: this.makeSelectRow('Filter scope', settings.filterScope, [
+                    { value: 'selected', text: 'Selected only' },
+                    { value: 'all', text: 'Whole splat' }
+                ], 'Selected only is safer. Whole splat is useful after you already saved a clean plane.'),
+                filterSide: this.makeSelectRow('Filter side', settings.filterSide, [
+                    { value: 'both', text: 'Both sides' },
+                    { value: 'positive', text: 'Positive side only' },
+                    { value: 'negative', text: 'Negative side only' }
+                ], 'Use Positive or Negative when artifacts sit only on one side of the plane.')
+            };
+
+            const planeToolsRow = document.createElement('div');
+            planeToolsRow.className = 'filter-panel-row filter-panel-preset-row';
+            planeToolsRow.title = 'Plane utilities used less often, but very handy for walls, floors, roofs, and slab cleanup.';
+
+            const planeToolsLabel = document.createElement('span');
+            planeToolsLabel.className = 'filter-panel-row-label';
+            planeToolsLabel.textContent = 'Saved plane';
+
+            const planeToolsButtons = document.createElement('div');
+            planeToolsButtons.className = 'filter-panel-preset-buttons';
+
+            const clearPlaneButton = document.createElement('span');
+            clearPlaneButton.className = 'filter-panel-preset-button';
+            clearPlaneButton.textContent = 'Clear';
+            clearPlaneButton.title = 'Clear the saved plane used by Preview Outside.';
+            clearPlaneButton.addEventListener('click', () => {
+                this.savedPlane = null;
+                this.statsDom.textContent = 'Advanced / Plane: saved plane cleared.';
+            });
+            planeToolsButtons.appendChild(clearPlaneButton);
+
+            planeToolsRow.appendChild(planeToolsLabel);
+            planeToolsRow.appendChild(planeToolsButtons);
+            this.rowsDom.appendChild(planeToolsRow);
+
+            const syncAdvancedSettings = () => {
+                const nextSettings = this.getAdvancedSettings();
+                saveJson('supersplat.advancedFilter.settings', nextSettings);
+                saveJson('supersplat.planeTool.settings', {
+                    planeFitThreshold: nextSettings.planeFitThreshold,
+                    outsideDistance: nextSettings.outsideDistance,
+                    filterScope: nextSettings.filterScope,
+                    filterSide: nextSettings.filterSide
+                });
+                this.updatePreviewButtonLabel();
+            };
+
+            [
+                this.advancedInputs.tool,
+                this.advancedInputs.planeAction,
+                this.advancedInputs.planeFitThreshold,
+                this.advancedInputs.outsideDistance,
+                this.advancedInputs.filterScope,
+                this.advancedInputs.filterSide
+            ].forEach((input) => {
+                input.addEventListener('change', syncAdvancedSettings);
+                input.addEventListener('input', syncAdvancedSettings);
+            });
+
+            this.statsDom.textContent = this.savedPlane
+                ? 'Advanced / Plane: saved plane is ready. Use Preview Outside to isolate off-plane points.'
+                : 'Advanced / Plane: rough-select a wall, floor, or roof, then run Select Plane or Set + Select.';
         } else {
-            if (mode === 'object') {
-                this.objectTab.classList.add('active');
-                this.titleDom.textContent = 'FILTERS / OBJECT';
-
-                const settings = loadJson<ObjectSettings>('supersplat.objectFilter.settings', DEFAULT_OBJECT_SETTINGS);
-                const pickRow = document.createElement('div');
-                pickRow.className = 'filter-panel-row filter-panel-preset-row';
-                pickRow.title = 'Enable interactive picking, then click the main viewport to grow an object from the clicked seed.';
-
-                const pickLabel = document.createElement('span');
-                pickLabel.className = 'filter-panel-row-label';
-                pickLabel.textContent = 'Viewport';
-
-                const pickButtons = document.createElement('div');
-                pickButtons.className = 'filter-panel-preset-buttons';
-
-                this.objectPickButton = this.makeButton('Picking On', 'primary');
-                this.objectPickButton.addEventListener('click', () => {
-                    if (this.objectInputs?.limitToSelection?.checked) {
-                        this.statsDom.textContent = 'Object mode: Scope to selection is on. Click Preview to grow objects directly from the current selection.';
-                        this.setObjectPickingActive(false);
-                        return;
-                    }
-                    this.setObjectPickingActive(!this.objectPickingActive);
-                    if (this.mode === 'object' && this.objectPickingActive) {
-                        this.statsDom.textContent = 'Object mode: click the main viewport to preview a whole object from the clicked seed.';
-                    }
-                });
-
-                pickButtons.appendChild(this.objectPickButton);
-                pickRow.appendChild(pickLabel);
-                pickRow.appendChild(pickButtons);
-                this.rowsDom.appendChild(pickRow);
-
-                this.objectInputs = {
-                    method: this.makeSelectRow('Method', settings.method, [
-                        { value: 'euclidean', text: 'Euclidean' },
-                        { value: 'color', text: 'Color + distance' }
-                    ], 'Euclidean grows by 3D connectivity only. Color + distance also checks color similarity while growing.'),
-                    seedMode: this.makeSelectRow('Seed mode', settings.seedMode, [
-                        { value: 'single', text: 'Single object' },
-                        { value: 'all', text: 'All selected seeds' }
-                    ], 'Single object uses the first selected seed only. All selected seeds expands every selected seed cluster.'),
-                    radius: this.makeInputRow('Radius', String(settings.radius), '3D connectivity radius for object growth.'),
-                    colorThreshold: this.makeInputRow('Color threshold', String(settings.colorThreshold), 'Only used by Color + distance. Lower is stricter.'),
-                    limitToSelection: this.makeCheckboxRow('Scope to selection', settings.limitToSelection, 'Only grow objects inside the points currently selected before you start object picking. Useful for a sky region or local work area.'),
-                    fastPreview: this.makeCheckboxRow('Fast preview', settings.fastPreview, 'Recommended ON. Caps growth earlier and yields more often so object picking stays responsive.'),
-                    maxPoints: this.makeInputRow('Max points', String(settings.maxPoints), 'Upper bound for a single object preview. Lower is faster and safer on huge scenes.')
-                };
-
-                this.objectInputs.limitToSelection.addEventListener('change', () => {
-                    const scopeMode = this.objectInputs.limitToSelection.checked;
-                    if (scopeMode) {
-                        this.setObjectPickingActive(false);
-                        this.statsDom.textContent = 'Object mode: Scope to selection is on. Click Preview to expand the currently selected point cloud directly, no seed pick needed.';
-                    } else {
-                        this.setObjectPickingActive(true);
-                        this.statsDom.textContent = 'Object mode: click the main viewport to preview a whole object from the clicked seed.';
-                    }
-                });
-
-                this.setObjectPickingActive(!settings.limitToSelection);
-                this.statsDom.textContent = settings.limitToSelection
-                    ? 'Object mode: Scope to selection is on. Click Preview to expand the currently selected point cloud directly, no seed pick needed.'
-                    : 'Object mode: click the main viewport to preview a whole object from the clicked seed. Turn on Scope to selection to limit growth to a preselected region.';
-                return;
-            }
-
             this.pointTab.classList.add('active');
             this.titleDom.textContent = 'FILTERS / POINT';
             this.makePresetRow([
@@ -2866,6 +3586,8 @@ class FilterPanel extends Container {
 
             this.statsDom.textContent = 'Point cloud start: Fast ON, radius/voxel 1.5~2.0, neighbors 1~2. Fast mode now uses voxel-guided local exact checks for cleaner edge preservation.';
         }
+
+        this.updatePreviewButtonLabel();
     }
 
     private getOutlierSettings(): OutlierSettings {
@@ -2884,6 +3606,23 @@ class FilterPanel extends Container {
             minScale: Math.max(0, finiteNumber(this.blackInputs.minScale.value, DEFAULT_BLACK_SETTINGS.minScale)),
             radius: Math.max(0, finiteNumber(this.blackInputs.radius.value, DEFAULT_BLACK_SETTINGS.radius)),
             minNeighbors: Math.max(0, Math.floor(finiteNumber(this.blackInputs.minNeighbors.value, DEFAULT_BLACK_SETTINGS.minNeighbors)))
+        };
+    }
+
+    private getSkySettings(): SkySettings {
+        return {
+            upAxis: this.skyInputs.upAxis.value === 'x'
+                ? 'x'
+                : (this.skyInputs.upAxis.value === 'z' ? 'z' : 'y'),
+            topPercent: Math.max(1, Math.min(80, finiteNumber(this.skyInputs.topPercent.value, DEFAULT_SKY_SETTINGS.topPercent))),
+            minBrightness: Math.max(0, Math.min(1, finiteNumber(this.skyInputs.minBrightness.value, DEFAULT_SKY_SETTINGS.minBrightness))),
+            maxWhiteSaturation: Math.max(0, Math.min(1, finiteNumber(this.skyInputs.maxWhiteSaturation.value, DEFAULT_SKY_SETTINGS.maxWhiteSaturation))),
+            minBlueBias: Math.max(-1, Math.min(1, finiteNumber(this.skyInputs.minBlueBias.value, DEFAULT_SKY_SETTINGS.minBlueBias))),
+            maxOpacity: Math.max(0, Math.min(1, finiteNumber(this.skyInputs.maxOpacity.value, DEFAULT_SKY_SETTINGS.maxOpacity))),
+            minScale: Math.max(0, finiteNumber(this.skyInputs.minScale.value, DEFAULT_SKY_SETTINGS.minScale)),
+            protectStructures: this.skyInputs.protectStructures.checked,
+            keepTopConnected: this.skyInputs.keepTopConnected.checked,
+            preferDiscreteSky: this.skyInputs.preferDiscreteSky.checked
         };
     }
 
@@ -2914,6 +3653,19 @@ class FilterPanel extends Container {
         };
     }
 
+    private getAdvancedSettings(): AdvancedSettings {
+        return {
+            tool: 'plane',
+            planeAction: this.advancedInputs.planeAction.value === 'outside'
+                ? 'outside'
+                : (this.advancedInputs.planeAction.value === 'set' ? 'set' : 'select'),
+            planeFitThreshold: Math.max(0.000001, finiteNumber(this.advancedInputs.planeFitThreshold.value, DEFAULT_ADVANCED_SETTINGS.planeFitThreshold)),
+            outsideDistance: Math.max(0.000001, finiteNumber(this.advancedInputs.outsideDistance.value, DEFAULT_ADVANCED_SETTINGS.outsideDistance)),
+            filterScope: this.advancedInputs.filterScope.value || DEFAULT_ADVANCED_SETTINGS.filterScope,
+            filterSide: this.advancedInputs.filterSide.value || DEFAULT_ADVANCED_SETTINGS.filterSide
+        };
+    }
+
     private async showError(header: string, message: string) {
         try {
             await this.events.invoke('showPopup', {
@@ -2933,10 +3685,11 @@ class FilterPanel extends Container {
             return;
         }
 
-        const limitToSelection = this.mode === 'object' ? false : this.getLimitToSelection();
+        const limitToSelection = (this.mode === 'object' || this.mode === 'advanced') ? false : this.getLimitToSelection();
         let originalSelectionMask: Uint8Array | null = null;
         let originalSelectionCount = 0;
         let processingIndices: number[] | null = null;
+        let previewNote = '';
 
         if (limitToSelection) {
             const { state, n } = prepareArrays(splat);
@@ -2954,11 +3707,15 @@ class FilterPanel extends Container {
         this.events.fire('progressStart',
             this.mode === 'outlier'
                 ? 'Outlier Filter'
+                : this.mode === 'sky'
+                    ? 'Sky Filter'
                 : this.mode === 'blackArtifact'
                     ? 'Black Artifact Filter'
                     : this.mode === 'object'
                         ? 'Object Filter'
-                        : 'Point Cloud Filter'
+                        : this.mode === 'advanced'
+                            ? 'Advanced Plane Filter'
+                            : 'Point Cloud Filter'
         );
 
         try {
@@ -2969,6 +3726,12 @@ class FilterPanel extends Container {
                 saveJson('supersplat.outlierFilter.settings', settings);
                 result = await computeOutlierMask(this.events, splat, settings, limitToSelection, processingIndices);
                 this.lastPreviewKind = 'outlier';
+            } else if (this.mode === 'sky') {
+                const settings = this.getSkySettings();
+                saveJson('supersplat.skyFilter.settings', settings);
+                result = await computeSkyMask(this.events, splat, settings, limitToSelection, processingIndices);
+                previewNote = `axis: ${settings.upAxis.toUpperCase()} | top: ${settings.topPercent}% | min brightness: ${settings.minBrightness}`;
+                this.lastPreviewKind = 'sky';
             } else if (this.mode === 'blackArtifact') {
                 const settings = this.getBlackSettings();
                 saveJson('supersplat.blackArtifactFilter.settings', settings);
@@ -2979,6 +3742,20 @@ class FilterPanel extends Container {
                 saveJson('supersplat.objectFilter.settings', settings);
                 result = await computeObjectMask(this.events, splat, settings);
                 this.lastPreviewKind = 'object';
+            } else if (this.mode === 'advanced') {
+                const settings = this.getAdvancedSettings();
+                saveJson('supersplat.advancedFilter.settings', settings);
+                saveJson('supersplat.planeTool.settings', {
+                    planeFitThreshold: settings.planeFitThreshold,
+                    outsideDistance: settings.outsideDistance,
+                    filterScope: settings.filterScope,
+                    filterSide: settings.filterSide
+                });
+                const advanced = await computeAdvancedPlaneMask(this.events, splat, settings, this.savedPlane);
+                result = advanced.result;
+                this.savedPlane = advanced.nextSavedPlane;
+                previewNote = advanced.previewNote;
+                this.lastPreviewKind = 'advanced';
             } else {
                 const settings = this.getPointCloudSettings();
                 saveJson('supersplat.pointCloudFilter.settings', settings);
@@ -3022,6 +3799,10 @@ class FilterPanel extends Container {
             lines.push(
                 ...otherEntries.map(([k, v]) => `${this.getReasonDisplayInfo(k).label}: ${v.toLocaleString()}`)
             );
+
+            if (previewNote) {
+                lines.push(previewNote);
+            }
 
             this.lastPreviewSummary = lines.join(' | ');
             this.statsDom.textContent = this.lastPreviewSummary;
