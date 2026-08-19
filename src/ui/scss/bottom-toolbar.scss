@@ -42,8 +42,18 @@
 }
 
 .bottom-toolbar-button {
+    background-color: $bcg-primary;
+
     svg {
         color: $clr-default;
+    }
+
+    &.active {
+        background-color: $clr-hilight !important;
+
+        svg {
+            color: $clr-active;
+        }
     }
 }
 

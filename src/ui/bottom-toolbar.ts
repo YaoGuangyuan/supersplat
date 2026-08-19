@@ -3,6 +3,8 @@ import { Button, Element, Container } from '@playcanvas/pcui';
 import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
+import colorPanelSvg from './svg/color-panel.svg';
+import cropSvg from './svg/crop.svg';
 import measureSvg from './svg/measure.svg';
 import orientSvg from './svg/orient.svg';
 import redoSvg from './svg/redo.svg';
@@ -16,7 +18,6 @@ import sphereSvg from './svg/select-sphere.svg';
 import boxSvg from './svg/show-hide-splats.svg';
 import undoSvg from './svg/undo.svg';
 import { Tooltips } from './tooltips';
-// import cropSvg from './svg/crop.svg';
 
 const createSvg = (svgString: string) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
@@ -50,20 +51,19 @@ class BottomToolbar extends Container {
 
         const filter = new Button({
             id: 'bottom-toolbar-filter',
-            class: 'bottom-toolbar-button',
-            icon: 'E198'
+            class: 'bottom-toolbar-button'
         });
 
         const plane = new Button({
             id: 'bottom-toolbar-plane',
             class: 'bottom-toolbar-button',
-            icon: 'E198'
+            icon: 'E198',
+            hidden: true
         });
 
         const section = new Button({
             id: 'bottom-toolbar-section',
-            class: 'bottom-toolbar-button',
-            icon: 'E198'
+            class: 'bottom-toolbar-button'
         });
 
         const picker = new Button({
@@ -153,6 +153,8 @@ class BottomToolbar extends Container {
 
         undo.dom.appendChild(createSvg(undoSvg));
         redo.dom.appendChild(createSvg(redoSvg));
+        filter.dom.appendChild(createSvg(colorPanelSvg));
+        section.dom.appendChild(createSvg(cropSvg));
         picker.dom.appendChild(createSvg(pickerSvg));
         polygon.dom.appendChild(createSvg(polygonSvg));
         brush.dom.appendChild(createSvg(brushSvg));

@@ -3,8 +3,8 @@
 #plane-panel {
     top: 50%;
     transform: translate(0, -50%);
-    right: 102px;
-    width: 320px;
+    right: var(--side-panel-base-right, 102px);
+    width: var(--side-panel-width, 320px);
     flex-direction: column;
     pointer-events: auto;
 

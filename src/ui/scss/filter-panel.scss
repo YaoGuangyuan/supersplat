@@ -3,8 +3,8 @@
 #filter-panel {
     top: 50%;
     transform: translate(0, -50%);
-    right: 102px;
-    width: 320px;
+    right: var(--side-panel-base-right, 102px);
+    width: var(--side-panel-width, 320px);
     flex-direction: column;
     pointer-events: auto;
 
@@ -56,10 +56,42 @@
     height: 28px;
 }
 
+#filter-panel .filter-panel-preset-row {
+    align-items: flex-start;
+    height: auto;
+    min-height: 32px;
+}
+
 #filter-panel .filter-panel-row-label {
     flex-grow: 1;
     color: $text-primary;
     padding-left: 4px;
+}
+
+#filter-panel .filter-panel-preset-buttons {
+    width: 126px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+}
+
+#filter-panel .filter-panel-preset-button {
+    min-width: 38px;
+    height: 22px;
+    line-height: 22px;
+    padding: 0 6px;
+    border-radius: 3px;
+    text-align: center;
+    color: $text-primary;
+    background-color: $bcg-primary;
+    cursor: pointer;
+    user-select: none;
+
+    &:hover {
+        background-color: $bcg-darkest;
+        color: $clr-hilight;
+    }
 }
 
 #filter-panel .filter-panel-input {
@@ -87,6 +119,78 @@
     white-space: normal;
     color: $text-secondary;
     background-color: $bcg-darkest;
+}
+
+#filter-panel .filter-panel-reason-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px 6px;
+    background-color: $bcg-primary;
+
+    &.hidden {
+        display: none;
+    }
+}
+
+#filter-panel .filter-panel-reason-button {
+    min-width: 40px;
+    height: 22px;
+    line-height: 22px;
+    padding: 0 6px;
+    border-radius: 3px;
+    color: $text-primary;
+    background-color: $bcg-dark;
+    cursor: pointer;
+    user-select: none;
+    text-align: center;
+
+    &:hover {
+        background-color: $bcg-darkest;
+        color: $clr-hilight;
+    }
+
+    &.active {
+        color: white;
+        background-color: #2d6cdf;
+    }
+
+    &.reason-opacity {
+        background-color: #355c7d;
+    }
+
+    &.reason-scale {
+        background-color: #6c4f8d;
+    }
+
+    &.reason-radius {
+        background-color: #7a5b2e;
+    }
+
+    &.reason-cluster {
+        background-color: #2f6f64;
+    }
+
+    &.reason-statistical {
+        background-color: #7b3f61;
+    }
+
+    &.reason-dark-opacity {
+        background-color: #4c566a;
+    }
+
+    &.reason-dark-scale {
+        background-color: #5f4b8b;
+    }
+
+    &.reason-dark-isolated {
+        background-color: #6b5b3e;
+    }
+
+    &.reason-clipped,
+    &.reason-generic {
+        background-color: #525252;
+    }
 }
 
 #filter-panel > .filter-panel-control-row {

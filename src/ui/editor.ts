@@ -194,6 +194,55 @@ class EditorUI {
         this.popup = popup;
         this.tooltips = tooltips;
 
+        const updateUtilityPanelLayout = () => {
+            const bothVisible = !filterPanel.hidden && !sectionPanel.hidden;
+            const filterButton = document.getElementById('bottom-toolbar-filter');
+            const sectionButton = document.getElementById('bottom-toolbar-section');
+
+            filterButton?.classList.toggle('active', !filterPanel.hidden);
+            sectionButton?.classList.toggle('active', !sectionPanel.hidden);
+
+            canvasContainer.dom.classList.toggle(
+                'tool-panels-side-by-side',
+                bothVisible
+            );
+
+            const composeActive = canvasContainer.dom.classList.contains('section-compose-active');
+            if (!composeActive) {
+                filterPanel.dom.style.right = '';
+                sectionPanel.dom.style.right = '';
+                return;
+            }
+
+            const baseRight = parseFloat(sectionPanel.dom.style.right || window.getComputedStyle(sectionPanel.dom).right);
+            if (!Number.isFinite(baseRight)) {
+                return;
+            }
+
+            const panelGap = 12;
+            const panelWidth = 320;
+            sectionPanel.dom.style.right = `${baseRight}px`;
+            filterPanel.dom.style.right = `${bothVisible ? baseRight + panelWidth + panelGap : baseRight}px`;
+        };
+
+        const toolPanelLayoutObserver = new MutationObserver(() => {
+            updateUtilityPanelLayout();
+        });
+
+        [filterPanel, sectionPanel].forEach((panel) => {
+            toolPanelLayoutObserver.observe(panel.dom, {
+                attributes: true,
+                attributeFilter: ['class', 'hidden']
+            });
+        });
+
+        toolPanelLayoutObserver.observe(canvasContainer.dom, {
+            attributes: true,
+            attributeFilter: ['class']
+        });
+
+        updateUtilityPanelLayout();
+
         document.body.appendChild(appContainer.dom);
         document.body.setAttribute('tabIndex', '-1');
 
